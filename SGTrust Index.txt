@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f4f7f9; }
+      .modal-container { max-width: 1200px; margin: auto; background: white; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); overflow: hidden; }
+      header { background: #fff; padding: 15px 20px; border-bottom: 1px solid #eee; font-weight: bold; font-size: 1.2em; display: flex; align-items: center; }
+      .main-content { display: flex; gap: 20px; padding: 0 20px 20px 20px; }
+      .form-pane { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+      .preview-pane { flex: 1.4; background: #f9f9f9; padding: 20px; border-radius: 8px; border: 1px solid #ddd; }
+      label { font-size: 0.85em; font-weight: bold; color: #444; margin-top: 5px; }
+      .field-tooltip { font-size: 0.75em; color: #666; font-style: italic; display: block; margin-top: -2px; margin-bottom: 2px; }
+      input, select, textarea { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box; }
+      textarea { resize: vertical; font-family: inherit; }
+      .email-body { background: white; border: 1px solid #ddd; margin-top: 10px; min-height: 450px; display: block; font-family: Arial, Helvetica, sans-serif; }
+      .email-content { padding: 25px 20px; color: #333333; }
+      .veeva-title { text-align: center; color: #000000; font-size: 22px; font-weight: bold; margin-top: 0; margin-bottom: 20px; font-family: Arial, sans-serif; }
+      .veeva-desc { line-height: 1.5; font-size: 14px; margin-bottom: 20px; color: #333333; }
+      .preview-pane .veeva-details-table { width: 100%; margin-bottom: 0px; border-collapse: collapse; font-size: 14px; font-family: Arial, sans-serif; }
+      .preview-pane .veeva-details-table td { padding: 4px 0; color: #333333; line-height: 1.25; }
+      .push-btn { background-color: #1a73e8; color: white; width: 100%; margin-top: 20px; transition: all 0.3s ease; padding: 12px; font-size: 1.1em; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; text-align: center; outline: none; }
+      .push-btn:hover { background-color: #155cb8; }
+      .push-btn.success-state { background-color: #28a745 !important; box-shadow: 0 0 12px rgba(40,167,69,0.4); }
+      .trust-btn { background-color: #4a5568; margin-top: 10px; }
+      .trust-btn:hover { background-color: #2d3748; }
+      .trust-btn.success-state { background-color: #28a745 !important; box-shadow: 0 0 12px rgba(40,167,69,0.4); }
+      .filter-dashboard { background: #f0f4f8; padding: 12px; border: 1px solid #d0daf0; border-radius: 6px; margin-bottom: 5px; display: flex; flex-direction: column; gap: 8px; }
+      .filter-section { display: flex; flex-direction: column; gap: 3px; }
+      .filter-section span { font-size: 0.75em; font-weight: bold; color: #4a5568; text-transform: uppercase; letter-spacing: 0.5px; }
+      .button-cluster { display: flex; flex-wrap: wrap; gap: 6px; }
+      .macro-filter-btn { background: white; border: 1px solid #b8c9df; padding: 4px 10px; font-size: 0.75em; font-weight: 600; color: #2c5282; border-radius: 4px; cursor: pointer; transition: all 0.15s; }
+      .macro-filter-btn:hover { background: #e2e8f0; border-color: #4a5568; }
+      .macro-filter-btn.active { background: #2b6cb0; color: white; border-color: #2b6cb0; }
+      .master-row { display: flex; align-items: center; justify-content: flex-start; gap: 8px; font-weight: bold; font-size: 0.9em; border-bottom: 1px dashed #cbd5e1; padding-bottom: 8px; margin-bottom: 4px; }
+      .master-row input[type="checkbox"] { width: auto; margin: 0; padding: 0; cursor: pointer; transform: scale(1.1); }
+      .master-row label { margin: 0; font-size: 1em; color: #1a202c; cursor: pointer; user-select: none; display: inline-block; }
+      .pod-row-item { display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 6px 8px; border-radius: 4px; transition: background-color 0.1s ease; cursor: pointer; }
+      .pod-row-item:hover { background-color: #e2e8f0; }
+      .pod-row-item input[type="checkbox"] { width: auto; margin: 0; padding: 0; cursor: pointer; transform: scale(1.05); }
+      .pod-row-item label { margin: 0; font-size: 0.95em; color: #2d3748; cursor: pointer; user-select: none; width: 100%; display: inline-block; }
+      .checkbox-row-group { display: flex; align-items: center; justify-content: flex-start; gap: 8px; margin-top: 6px; padding: 2px 0; }
+      .checkbox-row-group input[type="checkbox"] { width: auto !important; margin: 0; padding: 0; cursor: pointer; transform: scale(1.1); }
+      .checkbox-row-group label { margin: 0 !important; cursor: pointer; user-select: none; font-size: 0.9em; font-weight: 600; color: #333; }
+      .conditional-input-wrapper { display: block; transition: all 0.2s ease-in-out; }
+    </style>
+  </head>
+  <body>
+    <div class="modal-container">
+      <header><span>📩 SendGrid & Trust Comm Generator</span></header>
+      <div class="main-content">
+        <section class="form-pane">
+          <label>Release Type Context</label>
+          <select id="releaseType" onchange="updatePreview()">
+            <option value="Maintenance Only">Maintenance Only (No Downtime)</option>
+            <option value="Downtime Required">Downtime Required</option>
+          </select>
+
+          <label>Environment Context (Theme Color)</label>
+          <select id="envTheme" onchange="updatePreview()">
+            <option value="PROD">PROD (Veeva Blue Banner)</option>
+            <option value="SBX">SBX (Sandbox Orange Banner)</option>
+          </select>
+
+          <label style="color: #4a5568;">Trust Type Mapping Context</label>
+          <select id="statusCastType">
+            <option value="Maintenance" selected>Maintenance</option>
+            <option value="Unavailable">Unavailable</option>
+            <option value="Performance Degradation">Performance Degradation</option>
+            <option value="Informational">Informational</option>
+          </select>
+
+          <label>Subject Line / Appended Title</label>
+          <span class="field-tooltip">💡 Title will automatically append the selected Release Version code suffix.</span>
+          <input type="text" id="subjectLine" value="Veeva Vault Maintenance Release Notification" oninput="updatePreview()">
+
+          <label>Release Version</label>
+          <input type="text" id="releaseVersion" value="26R1.0.22" oninput="inputVersionOverride()">
+
+          <label>Select Target Date & Time</label>
+          <span class="field-tooltip">💡 Automatically calculates matching CEST time strings to bind world clock anchors.</span>
+          <input type="datetime-local" id="dateTime" oninput="formatFriendlyDate()">
+
+          <label>Friendly Date Output (Editable Override)</label>
+          <input type="text" id="friendlyDate" value="Wednesday, April 29 at 10:00 am PDT" oninput="updatePreview()">
+          <input type="hidden" id="isoStringValue" value="20260429T10">
+
+          <div id="downtimeInputWrapper" class="conditional-input-wrapper">
+            <label>Estimated Vault Downtime</label>
+            <input type="text" id="estimatedDowntime" value="90 Minutes" oninput="updatePreview()">
+          </div>
+
+          <label>Active PODs Multi-Select Criteria</label>
+          <div class="filter-dashboard">
+            <div class="master-row">
+              <input type="checkbox" id="masterSelectAll" onchange="toggleMasterSelectAll(this)">
+              <label for="masterSelectAll">Select All PODs</label>
+            </div>
+            
+            <div class="filter-section">
+              <span>Filter By Region (Select Multiple):</span>
+              <div id="regionButtonCluster" class="button-cluster"></div>
+            </div>
+
+            <div class="filter-section">
+              <span>Filter By Release Types (Select Multiple):</span>
+              <div id="releaseButtonCluster" class="button-cluster"></div>
+            </div>
+
+            <div class="filter-section">
+              <span>Filter By Product (Select Multiple):</span>
+              <div id="productButtonCluster" class="button-cluster"></div>
+            </div>
+          </div>
+
+          <label>Choose Individual PODs Checkbox Layout:</label>
+          <div id="podChecklistContainer" class="loading-placeholder" style="max-height: 180px; overflow-y: auto; background: white; border: 1px solid #ccc; padding: 4px; border-radius: 4px; font-size: 0.9em; display: flex; flex-direction: column; gap: 2px;">
+            🔄 Loading database matrix profiles from sheet...
+          </div>
+
+          <label style="margin-top: 10px;">Final Output View (Affected PODs Layout Box)</label>
+          <textarea id="affectedPods" rows="6" oninput="updatePreview()" placeholder="Your configurations will auto-compile here..."></textarea>
+
+          <label>Email Bottom Notes (Editable Layout)</label>
+          <textarea id="emailNotes" rows="7" oninput="updatePreview()">Click [[LOCATION_TAG]] to learn how to find your Vault's POD location.
+
+Read the [[VERSION]] Release Notes for details.
+
+For up-to-date information on Veeva Systems' service status, see the Veeva Trust Site.
+If you have any further questions, please submit a ticket with Veeva Product Support.</textarea>
+
+          <label>Release Notes URL</label>
+          <input type="text" id="releaseNotes" value="https://vaulthelp.veeva.com" oninput="updatePreview()">
+
+          <div class="checkbox-row-group">
+            <input type="checkbox" id="confirmUrl">
+            <label for="confirmUrl">I confirm this URL is active</label>
+          </div>
+        </section>
+
+        <section class="preview-pane">
+          <div class="preview-label" style="font-size: 0.85em; font-weight: bold; color: #555; text-align: center; margin-bottom: 5px;">SendGrid Live Email Preview</div>
+          <div id="dynamicTemplateViewport" class="email-body"></div>
+          
+          <button id="submitActionBtn" class="push-btn" onclick="submitData()">Create SendGrid Draft</button>
+          <button id="trustActionBtn" class="push-btn trust-btn" onclick="submitTrustData()">Create Trust Draft</button>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      let globalIndividualPods = [];
+      let podMetadataMap = {}; 
+      let activeRegions = [];
+      let activeReleases = [];
+      let activeProducts = [];
+      // Frontend layout mirror cache variable
+      let cachedFooterHtml = 'You are receiving this email as you are subscribed to receive product announcement emails on your Vault user profile.';
+
+      window.addEventListener('DOMContentLoaded', function() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        
+        const localIsoString = `${year}-${month}-${day}T${hours}:${minutes}`;
+        const dateInput = document.getElementById('dateTime');
+        
+        if (dateInput) {
+          dateInput.value = localIsoString;
+          formatFriendlyDate(); 
+        }
+
+        setTimeout(updatePreview, 300);
+        
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler(storeAndInitializeDashboard)
+            .withFailureHandler(function(err) { console.log("Backend connection error."); })
+            .fetchPodDataFromSheet();
+        }
+      });
+
+      function naturalSort(a, b) {
+        return String(a).localeCompare(String(b), undefined, {numeric: true, sensitivity: 'base'});
+      }
+
+      function formatFriendlyDate() {
+        const el = document.getElementById('dateTime');
+        if (!el || !el.value) return;
+        const input = el.value;
+        
+        const tokens = input.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+        if (tokens) {
+          const isoEl = document.getElementById('isoStringValue');
+          if (isoEl) isoEl.value = tokens[1] + tokens[2] + tokens[3] + 'T' + tokens[4];
+        }
+
+        const date = new Date(input);
+        const options = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+        const friendlyEl = document.getElementById('friendlyDate');
+        if (friendlyEl) friendlyEl.value = date.toLocaleString('en-US', options).replace(',', '') + " PDT";
+        updatePreview();
+      }
+
+      function inputVersionOverride() {
+        updatePreview();
+      }
+
+      function storeAndInitializeDashboard(response) {
+        if (!response || response.status !== 'success') return;
+        globalIndividualPods = response.individualPods || [];
+        podMetadataMap = response.podMetadata || {}; 
+        
+        // Extract the master layout footer from the backend single source function injection point
+        if (response.footerHtml) {
+          cachedFooterHtml = response.footerHtml;
+        }
+
+        let cleanRegions = (response.uniqueRegions || []).filter(region => region !== 'NA');
+        buildFilterButtons('regionButtonCluster', cleanRegions, 'REGION');
+        buildFilterButtons('releaseButtonCluster', response.uniqueReleases || [], 'RELEASE');
+        buildFilterButtons('productButtonCluster', response.uniqueProducts || [], 'PRODUCT');
+        renderChecklistOptions();
+      }
+
+      function buildFilterButtons(containerId, items, macroType) {
+        const cluster = document.getElementById(containerId);
+        if (!cluster) return;
+        cluster.innerHTML = items.map(item => 
+          `<button type="button" id="btn-${macroType}-${item}" class="macro-filter-btn" onclick="executeMacroSelection('${macroType}', '${item}')">+ ${item}</button>`
+        ).join('');
+      }
+
+      function renderChecklistOptions() {
+        const container = document.getElementById('podChecklistContainer');
+        if (!container) return;
+        container.classList.remove('loading-placeholder');
+        container.innerHTML = globalIndividualPods.map(p => {
+          let meta = podMetadataMap[p] || { region: 'Unknown', release: 'Unknown', product: 'Unknown' };
+          let inputId = `chk-${p}`;
+          return `
+            <div class="pod-row-item">
+              <input type="checkbox" id="${inputId}" class="pod-box" value="${p}" data-region="${meta.region}" data-release="${meta.release}" data-product="${meta.product}" onchange="calculateMatrixSelections()">
+              <label for="${inputId}">${p}</label>
+            </div>
+          `;
+        }).join('');
+        updatePreview();
+      }
+
+      function toggleMasterSelectAll(masterCheckbox) {
+        let boxes = document.querySelectorAll('.pod-box');
+        boxes.forEach(cb => cb.checked = masterCheckbox.checked);
+        calculateMatrixSelections();
+      }
+
+      function executeMacroSelection(filterType, attributeValue) {
+        if (filterType === 'REGION') {
+          let index = activeRegions.indexOf(attributeValue);
+          if (index !== -1) {
+            activeRegions.splice(index, 1);
+            document.getElementById(`btn-REGION-${attributeValue}`).classList.remove('active');
+          } else {
+            activeRegions.push(attributeValue);
+            document.getElementById(`btn-REGION-${attributeValue}`).classList.add('active');
+          }
+        } else if (filterType === 'RELEASE') {
+          let index = activeReleases.indexOf(attributeValue);
+          if (index !== -1) {
+            activeReleases.splice(index, 1);
+            document.getElementById(`btn-RELEASE-${attributeValue}`).classList.remove('active');
+          } else {
+            activeReleases.push(attributeValue);
+            document.getElementById(`btn-RELEASE-${attributeValue}`).classList.add('active');
+          }
+        } else if (filterType === 'PRODUCT') {
+          let index = activeProducts.indexOf(attributeValue);
+          if (index !== -1) {
+            activeProducts.splice(index, 1);
+            document.getElementById(`btn-PRODUCT-${attributeValue}`).classList.remove('active');
+          } else {
+            activeProducts.push(attributeValue);
+            document.getElementById(`btn-PRODUCT-${attributeValue}`).classList.add('active');
+          }
+        }
+        
+        let boxes = document.querySelectorAll('.pod-box');
+        if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0) {
+          boxes.forEach(cb => cb.checked = false);
+          updateMasterCheckboxState();
+          calculateMatrixSelections();
+          return;
+        }
+        
+        boxes.forEach(cb => {
+          let boxRegion = cb.getAttribute('data-region');
+          let boxRelease = cb.getAttribute('data-release');
+          let boxProduct = cb.getAttribute('data-product');
+          
+          let matchRegion = activeRegions.length === 0 || activeRegions.includes(boxRegion);
+          let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
+          let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
+          
+          cb.checked = matchRegion && matchRelease && matchProduct;
+        });
+        updateMasterCheckboxState();
+        calculateMatrixSelections(); 
+      }
+
+      function updateMasterCheckboxState() {
+        let totalBoxes = document.querySelectorAll('.pod-box').length;
+        let checkedBoxes = document.querySelectorAll('.pod-box:checked').length;
+        const master = document.getElementById('masterSelectAll');
+        if (master) {
+          master.checked = (totalBoxes === checkedBoxes && totalBoxes > 0);
+          master.indeterminate = (checkedBoxes > 0 && checkedBoxes < totalBoxes);
+        }
+      }
+
+      function calculateMatrixSelections() {
+        const textArea = document.getElementById('affectedPods');
+        if (!textArea) return;
+        
+        let checkedBoxes = [...document.querySelectorAll('.pod-box:checked')];
+        updateMasterCheckboxState();
+        
+        if (checkedBoxes.length === 0) {
+          textArea.value = "";
+          updatePreview();
+          return;
+        }
+
+        let regionalMap = { "US": [], "EU": [], "APAC": [], "Unknown": [] };
+        
+        checkedBoxes.forEach(cb => {
+          let podName = cb.value;
+          let region = cb.getAttribute('data-region') || 'Unknown';
+          let release = cb.getAttribute('data-release') || 'Release';
+          
+          if (!regionalMap[region]) regionalMap[region] = [];
+          regionalMap[region].push({ name: podName, release: release });
+        });
+
+        const targetRegionOrder = ["US", "EU", "APAC"];
+        let compiledLines = [];
+
+        targetRegionOrder.forEach(regKey => {
+          let podList = regionalMap[regKey] || [];
+          if (podList.length > 0) {
+            let sortedPodNames = podList.map(item => item.name).sort(naturalSort);
+            let releaseTypeTag = podList[0].release; 
+            compiledLines.push(`<u>${regKey} ${releaseTypeTag} Release:</u> ${sortedPodNames.join(', ')}`);
+          }
+        });
+
+        Object.keys(regionalMap).forEach(regKey => {
+          if (!targetRegionOrder.includes(regKey) && regionalMap[regKey].length > 0) {
+            let sortedPodNames = regionalMap[regKey].map(item => item.name).sort(naturalSort);
+            let releaseTypeTag = regionalMap[regKey][0].release;
+            compiledLines.push(`<u>${regKey} ${releaseTypeTag} Release:</u> ${sortedPodNames.join(', ')}`);
+          }
+        });
+
+        textArea.value = compiledLines.join('\n');
+        updatePreview(); 
+      }
+
+      function getSafeValue(id, fallback) {
+        const el = document.getElementById(id);
+        return el ? el.value : fallback;
+      }
+
+      function updatePreview() {
+        try {
+          const viewport = document.getElementById('dynamicTemplateViewport');
+          if (!viewport) return;
+
+          const releaseTypeValue = getSafeValue('releaseType', 'Maintenance Only');
+          const subject = getSafeValue('subjectLine', 'Veeva Vault Maintenance Release Notification');
+          const version = getSafeValue('releaseVersion', '26R1.0.22');
+          const friendlyDateRaw = getSafeValue('friendlyDate', 'Wednesday, April 29 at 10:00 am PDT');
+          const url = getSafeValue('releaseNotes', 'https://vaulthelp.veeva.com');
+          const envTheme = getSafeValue('envTheme', 'PROD');
+          const rawIso = getSafeValue('isoStringValue', '20260429T10');
+          const rawNotesText = getSafeValue('emailNotes', '');
+          const downtimeString = getSafeValue('estimatedDowntime', '90 Minutes');
+
+          const downtimeWrapper = document.getElementById('downtimeInputWrapper');
+          let dynamicDowntimeRowMarkup = "";
+
+          if (releaseTypeValue === "Downtime Required") {
+            if (downtimeWrapper) downtimeWrapper.style.display = "block";
+            dynamicDowntimeRowMarkup = `<tr><td style="padding: 4px 0;"><strong>Estimated Vault Downtime:</strong> ${downtimeString}</td></tr>`;
+          } else {
+            if (downtimeWrapper) downtimeWrapper.style.display = "none";
+            dynamicDowntimeRowMarkup = "";
+          }
+
+          const friendlyDate = friendlyDateRaw.replace(' at ', ', ');
+          let cestDateString = "";
+          const dateTimeInput = document.getElementById('dateTime');
+          if (dateTimeInput && dateTimeInput.value) {
+            const datePDT = new Date(dateTimeInput.value);
+            const dateCEST = new Date(datePDT.getTime() + (9 * 60 * 60 * 1000));
+            const optionsCEST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+            let formattedCEST = dateCEST.toLocaleString('en-US', optionsCEST).replace(',', '').replace(' at ', ', ');
+            cestDateString = " / " + formattedCEST + " CEST";
+          }
+
+          let activePreviewTopBannerUrl = envTheme === "SBX"
+            ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/4b9a6798-b8ad-475d-940b-67aaeb29039f/1578x93.png"
+            : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/39e112bf-4c92-4bcb-9fca-cf442dfbff2d/776x50.png";
+
+          let activePreviewBottomBannerUrl = envTheme === "SBX"
+            ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/f8bb1bde-21f8-4910-a6b4-ae373a014261/1578x50.png"
+            : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/66c81663-cafb-4ec2-851d-b6c10e25dfba/779x25.png";
+
+          let description = releaseTypeValue === "Downtime Required" 
+            ? "Veeva Platform will be upgraded to the latest maintenance release and the system will be <strong>unavailable for use during this time.</strong>" 
+            : "The Veeva Vault is scheduled to be upgraded to the latest maintenance release. There is no expected downtime, however, a short service interruption may be experienced.";
+
+          const affectedPodsTextArea = document.getElementById('affectedPods');
+          let regionHeaderPrefix = "PODs";
+          let htmlOutputLinesBlock = "";
+
+          if (affectedPodsTextArea && affectedPodsTextArea.value && affectedPodsTextArea.value.trim() !== "") {
+            let lines = affectedPodsTextArea.value.split('\n').map(l => l.trim()).filter(Boolean);
+            let activeHeadersFound = [];
+            
+            if (lines.length > 0) {
+              if (affectedPodsTextArea.value.toUpperCase().includes("US ")) activeHeadersFound.push("US");
+              if (affectedPodsTextArea.value.toUpperCase().includes("EU ")) activeHeadersFound.push("EU");
+              if (affectedPodsTextArea.value.toUpperCase().includes("APAC ")) activeHeadersFound.push("APAC");
+              
+              if (activeHeadersFound.length > 0) {
+                regionHeaderPrefix = activeHeadersFound.join('/') + " PODs";
+              }
+              htmlOutputLinesBlock = lines.join('<br/>');
+            }
+          }
+
+          let shortVersion = version.substring(0, 4);
+          let podFinderUrl = "https://rn.veevavault.help/en/gr/vault-pod-details/";
+          
+          let linkedNotesRaw = (rawNotesText || "").trim()
+            .replace(/\[\[LOCATION_TAG\]\]/g, '<a href="' + podFinderUrl + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">here</a>')
+            .replace(/\[\[VERSION\]\] Release Notes/g, '<a href="' + url + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none; font-weight: normal;">' + shortVersion + ' Release Notes</a>')
+            .replace(/\[\[VERSION\]\]/g, shortVersion);
+          
+          let previewHtmlText = linkedNotesRaw.replace(/\n/g, '<br/>');
+
+          let cleanFormattedNotes = previewHtmlText
+            .replace(/(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i, '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 8px; margin-bottom: 8px;"/>')
+            .replace(/Veeva Trust Site/g, '<a href="https://trust.veeva.com" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">Veeva Trust Site</a>')
+            .replace(/Veeva Product Support/g, '<a href="https://support.veeva.com/hc/en-us" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">Veeva Product Support</a>');
+
+          const worldClockUrl = 'https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&amp;iso=' + rawIso + '&amp;sort=1';
+
+          viewport.innerHTML = `
+            <div style="display: block; width: 100%;">
+               <img src="${activePreviewTopBannerUrl}" alt="Veeva Systems" style="display: block; width: 100%; height: auto; border: 0;" />
+            </div>
+            <div class="email-content">
+              <h2 class="veeva-title">${subject}</h2>
+              <p class="veeva-desc">${description}</p>
+              <table class="veeva-details-table">
+                <tr><td><strong>What:</strong> Veeva Vault ${version}</td></tr>
+                <tr><td><strong>When:</strong> <a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline; ">${friendlyDate}${cestDateString}</a></td></tr>
+                ${dynamicDowntimeRowMarkup}
+                <tr><td><strong>Affected PODs:</strong> ${regionHeaderPrefix}</td></tr>
+              </table>
+              <div style="margin-top: 12px; font-weight: normal; font-size: 14px; line-height: 1.6; color: #333333; font-family: Arial, sans-serif; white-space: normal;">
+                ${htmlOutputLinesBlock ? htmlOutputLinesBlock + '<br/><br/>' : ''}
+                ${cleanFormattedNotes}
+              </div>
+            </div>
+            <div style="display: block; width: 100%;">
+               <img src="${activePreviewBottomBannerUrl}" alt="" style="display: block; width: 100%; height: auto; border: 0;" />
+            </div>
+            <p style="font-size: 11px; color: #555555; padding: 15px; margin: 0; background: #fff; font-family: Arial, sans-serif; line-height: 1.5;">
+              ${cachedFooterHtml}
+            </p>
+          `;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      function submitData() {
+        const confirmEl = document.getElementById('confirmUrl');
+        if (confirmEl && !confirmEl.checked) { alert("Confirm active URL parameter."); return; }
+        
+        const formDataPayload = {
+          envTheme: getSafeValue('envTheme', 'PROD'), 
+          releaseType: getSafeValue('releaseType', 'Maintenance Only'),
+          subjectLine: getSafeValue('subjectLine', ''),
+          version: getSafeValue('releaseVersion', ''),
+          friendlyDate: getSafeValue('friendlyDate', ''),
+          isoString: getSafeValue('isoStringValue', ''),
+          affectedPods: getSafeValue('affectedPods', ''),
+          notesUrl: getSafeValue('releaseNotes', ''),
+          customNotesText: getSafeValue('emailNotes', ''),
+          estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes')
+        };
+        const btn = document.getElementById('submitActionBtn');
+        if (btn) { btn.innerText = "⏳ Processing Request..."; btn.disabled = true; }
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler(function() {
+              if (btn) {
+                btn.classList.add('success-state');
+                btn.innerText = "✓ SendGrid Draft Created!";
+                btn.disabled = false;
+                setTimeout(() => { btn.classList.remove('success-state'); btn.innerText = "Create SendGrid Draft"; }, 3500);
+              }
+            })
+            .withFailureHandler(function(err) {
+              alert("SendGrid Transmission Error: " + err.toString());
+              if (btn) { btn.innerText = "Create SendGrid Draft"; btn.disabled = false; }
+            })
+            .processPushRequest(formDataPayload);
+        }
+      }
+
+      function submitTrustData() {
+        let currentIso = getSafeValue('isoStringValue', '');
+        if (!currentIso || currentIso.trim() === "") {
+           const dtInput = document.getElementById('dateTime');
+           if (dtInput && dtInput.value) {
+              const tk = dtInput.value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+              if (tk) currentIso = tk[1] + tk[2] + tk[3] + 'T' + tk[4];
+           }
+        }
+
+        const formDataPayload = {
+          envTheme: getSafeValue('envTheme', 'PROD'), 
+          releaseType: getSafeValue('releaseType', 'Maintenance Only'),
+          statusCastType: getSafeValue('statusCastType', 'Maintenance'),
+          subjectLine: getSafeValue('subjectLine', ''),
+          version: getSafeValue('releaseVersion', ''),
+          friendlyDate: getSafeValue('friendlyDate', ''),
+          isoString: currentIso,
+          affectedPods: getSafeValue('affectedPods', ''),
+          notesUrl: getSafeValue('releaseNotes', ''),
+          customNotesText: getSafeValue('emailNotes', ''),
+          estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes')
+        };
+
+        const btn = document.getElementById('trustActionBtn');
+        if (btn) { btn.innerText = "⏳ Pushing to StatusCast..."; btn.disabled = true; }
+
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler(function() {
+              if (btn) {
+                btn.classList.add('success-state');
+                btn.innerText = "✓ StatusCast Draft Created!";
+                btn.disabled = false;
+                setTimeout(() => { btn.classList.remove('success-state'); btn.innerText = "Create Trust Draft"; }, 3500);
+              }
+            })
+            .withFailureHandler(function(err) {
+              alert("StatusCast Connection Transmission Failure: " + err.toString());
+              if (btn) { btn.innerText = "Create Trust Draft"; btn.disabled = false; }
+            })
+            .processTrustPushRequest(formDataPayload);
+        }
+      }
+    </script>
+  </body>
+</html>
