@@ -3,28 +3,92 @@
   <head>
     <base target="_top">
     <style>
-      body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f4f7f9; }
-      .modal-container { max-width: 1200px; margin: auto; background: white; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); overflow: hidden; }
-      header { background: #fff; padding: 15px 20px; border-bottom: 1px solid #eee; font-weight: bold; font-size: 1.2em; display: flex; align-items: center; }
-      .main-content { display: flex; gap: 20px; padding: 0 20px 20px 20px; }
-      .form-pane { flex: 1; display: flex; flex-direction: column; gap: 10px; }
-      .preview-pane { flex: 1.4; background: #f9f9f9; padding: 20px; border-radius: 8px; border: 1px solid #ddd; }
+      body { 
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+        padding: 20px; 
+        background-color: #f4f7f9; 
+        margin: 0;
+        box-sizing: border-box;
+      }
+      .modal-container { 
+        max-width: 1200px; 
+        margin: auto; 
+        background: white; 
+        border-radius: 8px; 
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
+        display: flex;
+        flex-direction: column;
+      }
+      header { 
+        background: #fff; 
+        padding: 15px 20px; 
+        border-bottom: 1px solid #eee; 
+        font-weight: bold; 
+        font-size: 1.2em; 
+        display: flex; 
+        align-items: center;
+        flex-shrink: 0;
+      }
+      
+      .main-content { 
+        display: flex; 
+        gap: 20px; 
+        padding: 0 20px 20px 20px; 
+        align-items: flex-start; 
+        box-sizing: border-box;
+      }
+      
+      .form-pane { 
+        flex: 1; 
+        display: flex; 
+        flex-direction: column; 
+        gap: 10px; 
+        box-sizing: border-box;
+      }
+      
+      .preview-pane { 
+        flex: 1.4; 
+        background: #f9f9f9; 
+        padding: 20px; 
+        border-radius: 8px; 
+        border: 1px solid #ddd; 
+        position: -webkit-sticky;
+        position: sticky;
+        top: 20px; 
+        display: flex;
+        flex-direction: column;
+        box-sizing: border-box;
+        max-height: calc(100vh - 120px); 
+      }
+      
       label { font-size: 0.85em; font-weight: bold; color: #444; margin-top: 5px; }
       .field-tooltip { font-size: 0.75em; color: #666; font-style: italic; display: block; margin-top: -2px; margin-bottom: 2px; }
       input, select, textarea { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box; }
       textarea { resize: vertical; font-family: inherit; }
-      .email-body { background: white; border: 1px solid #ddd; margin-top: 10px; min-height: 450px; display: block; font-family: Arial, Helvetica, sans-serif; }
+      
+      .email-body { 
+        background: white; 
+        border: 1px solid #ddd; 
+        margin-top: 10px; 
+        flex-grow: 1;
+        overflow-y: auto;
+        display: block; 
+        font-family: Arial, Helvetica, sans-serif; 
+      }
+      
       .email-content { padding: 25px 20px; color: #333333; }
       .veeva-title { text-align: center; color: #000000; font-size: 22px; font-weight: bold; margin-top: 0; margin-bottom: 20px; font-family: Arial, sans-serif; }
       .veeva-desc { line-height: 1.5; font-size: 14px; margin-bottom: 20px; color: #333333; }
       .preview-pane .veeva-details-table { width: 100%; margin-bottom: 0px; border-collapse: collapse; font-size: 14px; font-family: Arial, sans-serif; }
       .preview-pane .veeva-details-table td { padding: 4px 0; color: #333333; line-height: 1.25; }
-      .push-btn { background-color: #1a73e8; color: white; width: 100%; margin-top: 20px; transition: all 0.3s ease; padding: 12px; font-size: 1.1em; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; text-align: center; outline: none; }
+      
+      .push-btn { background-color: #1a73e8; color: white; width: 100%; margin-top: 20px; transition: all 0.3s ease; padding: 12px; font-size: 1.1em; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; text-align: center; outline: none; flex-shrink: 0; }
       .push-btn:hover { background-color: #155cb8; }
       .push-btn.success-state { background-color: #28a745 !important; box-shadow: 0 0 12px rgba(40,167,69,0.4); }
       .trust-btn { background-color: #4a5568; margin-top: 10px; }
       .trust-btn:hover { background-color: #2d3748; }
       .trust-btn.success-state { background-color: #28a745 !important; box-shadow: 0 0 12px rgba(40,167,69,0.4); }
+      
       .filter-dashboard { background: #f0f4f8; padding: 12px; border: 1px solid #d0daf0; border-radius: 6px; margin-bottom: 5px; display: flex; flex-direction: column; gap: 8px; }
       .filter-section { display: flex; flex-direction: column; gap: 3px; }
       .filter-section span { font-size: 0.75em; font-weight: bold; color: #4a5568; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -62,7 +126,7 @@
             <option value="SBX">SBX (Sandbox Orange Banner)</option>
           </select>
 
-          <label style="color: #4a5568;">Trust Type Mapping Context</label>
+          <label style="color: #4a5568;">Trust Type</label>
           <select id="statusCastType">
             <option value="Maintenance" selected>Maintenance</option>
             <option value="Unavailable">Unavailable</option>
@@ -154,7 +218,6 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
       let activeRegions = [];
       let activeReleases = [];
       let activeProducts = [];
-      // Frontend layout mirror cache variable
       let cachedFooterHtml = 'You are receiving this email as you are subscribed to receive product announcement emails on your Vault user profile.';
 
       window.addEventListener('DOMContentLoaded', function() {
@@ -214,7 +277,6 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
         globalIndividualPods = response.individualPods || [];
         podMetadataMap = response.podMetadata || {}; 
         
-        // Extract the master layout footer from the backend single source function injection point
         if (response.footerHtml) {
           cachedFooterHtml = response.footerHtml;
         }
@@ -400,15 +462,39 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
           }
 
           const friendlyDate = friendlyDateRaw.replace(' at ', ', ');
-          let cestDateString = "";
+          
+          // DYNAMIC LIVE PREVIEW TIMEZONE COMPILER RENDER (JST Updated)
+          let activeTimeStrings = [];
           const dateTimeInput = document.getElementById('dateTime');
+          
           if (dateTimeInput && dateTimeInput.value) {
             const datePDT = new Date(dateTimeInput.value);
-            const dateCEST = new Date(datePDT.getTime() + (9 * 60 * 60 * 1000));
-            const optionsCEST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
-            let formattedCEST = dateCEST.toLocaleString('en-US', optionsCEST).replace(',', '').replace(' at ', ', ');
-            cestDateString = " / " + formattedCEST + " CEST";
+            const currentPodsVal = getSafeValue('affectedPods', '').toUpperCase();
+            
+            let hasUS = currentPodsVal.includes("US ");
+            let hasEU = currentPodsVal.includes("EU ");
+            let hasAPAC = currentPodsVal.includes("APAC ");
+            
+            if (!hasUS && !hasEU && !hasAPAC) { hasUS = true; hasEU = true; hasAPAC = true; }
+            
+            if (hasUS) {
+              activeTimeStrings.push(friendlyDate);
+            }
+            if (hasEU) {
+              const dateCEST = new Date(datePDT.getTime() + (9 * 60 * 60 * 1000));
+              const optionsCEST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+              let formattedCEST = dateCEST.toLocaleString('en-US', optionsCEST).replace(',', '').replace(' at ', ', ') + " CEST";
+              activeTimeStrings.push(formattedCEST);
+            }
+            if (hasAPAC) {
+              const dateJST = new Date(datePDT.getTime() + (16 * 60 * 60 * 1000)); // PDT + 16 Hours = JST
+              const optionsJST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+              let formattedJST = dateJST.toLocaleString('en-US', optionsJST).replace(',', '').replace(' at ', ', ') + " JST";
+              activeTimeStrings.push(formattedJST);
+            }
           }
+          
+          let displayWhenMarkupString = activeTimeStrings.length > 0 ? activeTimeStrings.join(' / ') : friendlyDate;
 
           let activePreviewTopBannerUrl = envTheme === "SBX"
             ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/4b9a6798-b8ad-475d-940b-67aaeb29039f/1578x93.png"
@@ -468,7 +554,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
               <p class="veeva-desc">${description}</p>
               <table class="veeva-details-table">
                 <tr><td><strong>What:</strong> Veeva Vault ${version}</td></tr>
-                <tr><td><strong>When:</strong> <a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline; ">${friendlyDate}${cestDateString}</a></td></tr>
+                <tr><td><strong>When:</strong> <a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline; ">${displayWhenMarkupString}</a></td></tr>
                 ${dynamicDowntimeRowMarkup}
                 <tr><td><strong>Affected PODs:</strong> ${regionHeaderPrefix}</td></tr>
               </table>
