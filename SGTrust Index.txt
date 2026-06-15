@@ -126,7 +126,7 @@
             <option value="SBX">SBX (Sandbox Orange Banner)</option>
           </select>
 
-          <label style="color: #4a5568;">Trust Type</label>
+          <label style="color: #4a5568;">Trust Type Mapping Context</label>
           <select id="statusCastType">
             <option value="Maintenance" selected>Maintenance</option>
             <option value="Unavailable">Unavailable</option>
