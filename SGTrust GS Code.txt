@@ -39,72 +39,55 @@ function getUnifiedFooterText() {
  * DYNAMIC POD DATA INGESTION ENGINE
  */
 function fetchPodDataFromSheet() {
-try {
+  try {
     let rows;
     try {
-      // 1. Unified the variable name to 'sheetUrl'
-      const sheetUrl = "https://docs.google.com/spreadsheets/d/1IHhaFXSFqKtwOfmBANlxss8Hp738SyRPncjhAbUaJo/edit?gid=1532506294#gid=1532506294";
-      
-      // 2. Used openByUrl since we are passing the full web link
+      const sheetUrl = "https://docs.google.com/spreadsheets/d/15MHB1NqfremPPvwenBHmjh7r00DL1pT1PRY9SRX7GN8/edit?gid=1274836295#gid=1274836295";
       const ss = SpreadsheetApp.openByUrl(sheetUrl);
+      const targetSheets = ss.getSheets().filter(s => s.getSheetId() == 1274836295);
+      const sheet = targetSheets.length > 0 ? targetSheets[0] : ss.getSheets()[0];
       
-      // 3. Set a default fallback sheet (index 0)
-      let sheet = ss.getSheets()[0];
-      
-      // 4. Safely filter for the specific tab ID if it exists
-      const targetSheets = ss.getSheets().filter(s => s.getSheetId() == 1532506294);
-      if (targetSheets.length > 0) {
-        sheet = targetSheets[0];
-      }
-
-      const lastRow = sheet.getLastRow();
-      const lastCol = sheet.getLastColumn();
-      
-      // 5. Added a safety check just in case the target sheet is empty
-      if (lastRow > 0 && lastCol > 0) {
-        rows = sheet.getRange(1, 1, lastRow, lastCol).getValues();
-      } else {
-        rows = [];
-      }
-      
+      // OPTIMIZATION: One API call to pull all data instead of calling getLastRow/Col separately
+      rows = sheet.getDataRange().getValues();
     } catch (sheetErr) {
       console.error("Sheet baseline disconnect handled: " + sheetErr.toString());
-      return {
-        status: 'success',
-        individualPods: ["VV3-3057", "VV3-3099"],
+      return { 
+        status: 'success', 
+        individualPods: ["VV3-3057", "VV3-3099"], 
         podMetadata: {"VV3-3057": {region: "APAC", release: "General", product: "Vault", trustId: ""}},
         uniqueRegions: ["US", "EU", "APAC"],
         uniqueReleases: ["General"],
         uniqueProducts: ["Safety", "LIMS", "RegOne", "Vault"]
-      };}
-    
+      };
+    }
 
     const headers = rows[0].map(h => String(h).trim().toUpperCase());
-    
     const podColIndex = headers.indexOf("POD");          
     const regionColIndex = headers.indexOf("REGION");    
     const releaseColIndex = headers.indexOf("RELEASE");  
     const productColIndex = headers.indexOf("PRODUCT");
     const podGroupColIndex = headers.indexOf("VAULT POD GROUP"); 
-    const trustIdColIndex = headers.indexOf("TRUST ID"); // Maps Column K
+    const trustIdColIndex = headers.indexOf("TRUST ID"); 
     
-    let podValues = [];
-    let podMetadata = {};
-    let regionsSet = new Set();
-    let releasesSet = new Set();
-    let productsSet = new Set();
+    const podValues = [];
+    const podMetadata = {};
+    const regionsSet = new Set();
+    const releasesSet = new Set();
+    const productsSet = new Set();
 
     for (let i = 1; i < rows.length; i++) {
-      let currentPod = (podColIndex !== -1) ? String(rows[i][podColIndex]).trim() : "";
-      let currentRegion = (regionColIndex !== -1) ? String(rows[i][regionColIndex]).trim() : "";
-      let currentRelease = (releaseColIndex !== -1) ? String(rows[i][releaseColIndex]).trim() : "";
-      let currentProduct = (productColIndex !== -1) ? String(rows[i][productColIndex]).trim() : "";
-      let currentPodGroup = (podGroupColIndex !== -1) ? String(rows[i][podGroupColIndex]).trim() : "";
-      let currentTrustId = (trustIdColIndex !== -1) ? String(rows[i][trustIdColIndex]).trim() : "";
+      const row = rows[i];
+      const currentPod = podColIndex !== -1 ? String(row[podColIndex]).trim() : "";
+      const currentPodGroup = podGroupColIndex !== -1 ? String(row[podGroupColIndex]).trim() : "";
 
-      if (currentPod !== "" && currentPodGroup !== "") {
+      if (currentPod && currentPodGroup) {
         podValues.push(currentPod);
         
+        let currentRegion = regionColIndex !== -1 ? String(row[regionColIndex]).trim() : "Unknown";
+        let currentRelease = releaseColIndex !== -1 ? String(row[releaseColIndex]).trim() : "Unknown";
+        let currentProduct = productColIndex !== -1 ? String(row[productColIndex]).trim() : "Unknown";
+        const currentTrustId = trustIdColIndex !== -1 ? String(row[trustIdColIndex]).trim() : "";
+
         if (!currentRegion) currentRegion = "Unknown";
         if (!currentRelease) currentRelease = "Unknown";
         if (!currentProduct) currentProduct = "Unknown";
@@ -125,10 +108,7 @@ try {
       }
     }
     
-    let finalUniqueProducts = [...productsSet].sort();
-    if (finalUniqueProducts.length === 0) {
-      finalUniqueProducts = ["Safety", "LIMS", "RegOne", "Vault"];
-    }
+    const finalUniqueProducts = productsSet.size > 0 ? [...productsSet].sort() : ["Safety", "LIMS", "RegOne", "Vault"];
     
     return {
       status: 'success',
@@ -137,7 +117,7 @@ try {
       uniqueRegions: [...regionsSet].sort(),
       uniqueReleases: [...releasesSet].sort(),
       uniqueProducts: finalUniqueProducts,
-      footerHtml: getUnifiedFooterText() // Safe handshake to the frontend UI
+      footerHtml: getUnifiedFooterText()
     };
   } catch (err) {
     return { status: 'error', message: err.toString() };
@@ -145,13 +125,12 @@ try {
 }
 
 function getSenderIdByEmail(apiKey, targetEmail) {
-  const options = {
+  const response = UrlFetchApp.fetch("https://api.sendgrid.com/v3/verified_senders", {
     "method": "get",
     "headers": { "Authorization": "Bearer " + apiKey },
     "muteHttpExceptions": true
-  };
+  });
   
-  const response = UrlFetchApp.fetch("https://api.sendgrid.com/v3/verified_senders", options);
   if (response.getResponseCode() !== 200) {
     throw new Error("Unable to read Sender Identity records from SendGrid: " + response.getContentText());
   }
@@ -167,31 +146,29 @@ function getSenderIdByEmail(apiKey, targetEmail) {
  * UNIFIED HTML GENERATOR LAYOUT
  */
 function buildUnifiedHtmlBody(formData, isStatusCast) {
-  const defaultSubject = "Veeva Vault Maintenance Release Notification";
-  const defaultVersion = "26R1.0.22";
-  const defaultDowntime = "90 Minutes";
-  const defaultFriendlyDate = "Wednesday, April 29 at 10:00 am PDT";
-  const defaultUrl = "https://vaulthelp.veeva.com";
-  const defaultIso = "20260429T10";
-  
-  const cleanSubject = (formData.subjectLine && formData.subjectLine.trim() !== "") ? formData.subjectLine.trim() : defaultSubject;
-  const rawVersion = (formData.version && formData.version.trim() !== "") ? formData.version.trim() : defaultVersion;
-  const finalDowntimeString = (formData.estimatedDowntime && formData.estimatedDowntime.trim() !== "") ? formData.estimatedDowntime.trim() : defaultDowntime;
-  const cleanFriendlyDate = (formData.friendlyDate && formData.friendlyDate.trim() !== "") ? formData.friendlyDate.trim() : defaultFriendlyDate;
-  const cleanUrl = (formData.notesUrl && formData.notesUrl.trim() !== "") ? formData.notesUrl.trim() : defaultUrl;
-  const cleanIso = (formData.isoString && formData.isoString.trim() !== "") ? formData.isoString.trim() : defaultIso;
+  if (!formData) formData = {};
+
+  const cleanSubject = formData.subjectLine?.trim() || "Veeva Vault Maintenance Release Notification";
+  const rawVersion = formData.version?.trim() || "26R1.0.22";
+  const finalDowntimeString = formData.estimatedDowntime?.trim() || "90 Minutes";
+  const cleanFriendlyDate = formData.friendlyDate?.trim() || "Wednesday, April 29 at 10:00 am PDT";
+  const cleanUrl = formData.notesUrl?.trim() || "https://vaulthelp.veeva.com";
+  const cleanIso = formData.isoString?.trim() || "20260429T10";
   const cleanReleaseType = formData.releaseType || "Maintenance Only";
   const cleanEnvTheme = formData.envTheme || "PROD";
 
-  let topBannerImageUrl = cleanEnvTheme === "SBX" 
+  const isSbx = cleanEnvTheme === "SBX";
+  const topBannerImageUrl = isSbx 
     ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/4b9a6798-b8ad-475d-940b-67aaeb29039f/1578x93.png"
     : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/39e112bf-4c92-4bcb-9fca-cf442dfbff2d/776x50.png";
 
-  let bottomBannerImageUrl = cleanEnvTheme === "SBX"
+  const bottomBannerImageUrl = isSbx
     ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/f8bb1bde-21f8-4910-a6b4-ae373a014261/1578x50.png"
     : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/66c81663-cafb-4ec2-851d-b6c10e25dfba/779x25.png";
 
-  // Updated layout engine description string
+  const topBannerMarkup = `<img src="${topBannerImageUrl}" alt="Top Banner" style="width: 100%; max-width: 650px; height: auto; display: block;" />`;
+  const bottomBannerMarkup = `<img src="${bottomBannerImageUrl}" alt="Bottom Banner" style="width: 100%; max-width: 650px; height: auto; display: block;" />`;
+
   let description = "Veeva Vault is scheduled to be upgraded to the latest maintenance release. There is no expected downtime, however, a short service interruption may be experienced.";
   let dynamicDowntimeRowMarkup = "";
   if (cleanReleaseType === "Downtime Required") {
@@ -203,18 +180,17 @@ function buildUnifiedHtmlBody(formData, isStatusCast) {
   let formattedPodsListString = "";
 
   if (formData.affectedPods) {
-    let lines = formData.affectedPods.split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = formData.affectedPods.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length > 0) {
-      let selectedRegionsSet = new Set();
+      const selectedRegionsSet = new Set();
       lines.forEach(line => {
-        let plainText = line.replace(/<\/?[^>]+(>|$)/g, ""); 
-        if (plainText.toUpperCase().startsWith("US ")) selectedRegionsSet.add("US");
-        if (plainText.toUpperCase().startsWith("EU ")) selectedRegionsSet.add("EU");
-        if (plainText.toUpperCase().startsWith("APAC ")) selectedRegionsSet.add("APAC");
+        const plainText = line.replace(/<\/?[^>]+(>|$)/g, "").toUpperCase(); 
+        if (plainText.startsWith("US ")) selectedRegionsSet.add("US");
+        if (plainText.startsWith("EU ")) selectedRegionsSet.add("EU");
+        if (plainText.startsWith("APAC ")) selectedRegionsSet.add("APAC");
       });
 
-      const strictRegionOrder = ["US", "EU", "APAC"];
-      let orderedRegions = strictRegionOrder.filter(r => selectedRegionsSet.has(r));
+      const orderedRegions = ["US", "EU", "APAC"].filter(r => selectedRegionsSet.has(r));
       if (orderedRegions.length > 0) {
         regionHeaderPrefix = orderedRegions.join('/') + " PODs";
       }
@@ -222,48 +198,55 @@ function buildUnifiedHtmlBody(formData, isStatusCast) {
     }
   }
 
-  let shortVersion = rawVersion.substring(0, 4);
-  let podFinderUrl = "https://rn.veevavault.help/en/gr/vault-pod-details/";
-  let rawNotesText = (formData.customNotesText && formData.customNotesText.trim() !== "") ? formData.customNotesText : "";
+  const shortVersion = rawVersion.substring(0, 4);
+  const podFinderUrl = "https://rn.veevavault.help/en/gr/vault-pod-details/";
+  const rawNotesText = formData.customNotesText?.trim() || "";
   
-  let resolvedNotes = rawNotesText
+  const resolvedNotes = rawNotesText
     .replace(/\[\[LOCATION_TAG\]\]/g, `<a href="${podFinderUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">here</a>`)
     .replace(/\[\[VERSION\]\] Release Notes/g, `<a href="${cleanUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none; font-weight: normal;">${shortVersion} Release Notes</a>`)
     .replace(/\[\[VERSION\]\]/g, shortVersion)
     .replace(/\[\[PODS\]\]/g, ""); 
 
-  let tempHtml = resolvedNotes.replace(/\n/g, '<br/>');
-  let processedNotesHtml = tempHtml
-    .replace(/(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i, '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 8px; margin-bottom: 8px;"/>')
+  const processedNotesHtml = resolvedNotes.replace(/\n/g, '<br/>')
+    .replace(/(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i, '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 8px; margin-bottom: 8px nighttime;"/>')
     .replace('Veeva Trust Site', "<a href='https://trust.veeva.com' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Veeva Trust Site</a>")
     .replace('Veeva Product Support', "<a href='https://support.veeva.com/hc/en-us' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Veeva Product Support</a>");
 
   const worldClockUrl = "https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&amp;iso=" + cleanIso + "&amp;sort=1";
-
-  let cestDateString = "";
+  const timeStringsArray = [];
+  
   if (cleanIso && cleanIso.length >= 11) {
     try {
-      let yr = cleanIso.substring(0,4);
-      let mo = cleanIso.substring(4,6);
-      let dy = cleanIso.substring(6,8);
-      let hr = cleanIso.substring(9,11);
-      let mockDate = new Date(`${yr}-${mo}-${dy}T${hr}:00:00`);
-      if (!isNaN(mockDate.getTime())) {
-        let dateCEST = new Date(mockDate.getTime() + (9 * 60 * 60 * 1000));
-        let optionsCEST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
-        let formattedCEST = dateCEST.toLocaleString('en-US', optionsCEST).replace(',', '').replace(' at ', ', ');
-        cestDateString = " / " + formattedCEST + " CEST";
+      const yr = cleanIso.substring(0,4);
+      const mo = cleanIso.substring(4,6);
+      const dy = cleanIso.substring(6,8);
+      const hr = cleanIso.substring(9,11);
+      const baseDate = new Date(`${yr}-${mo}-${dy}T${hr}:00:00`);
+      
+      if (!isNaN(baseDate.getTime())) {
+        const upperPodsText = formData.affectedPods ? formData.affectedPods.toUpperCase() : "";
+        let hasUS = upperPodsText.includes("US ");
+        let hasEU = upperPodsText.includes("EU ");
+        let hasAPAC = upperPodsText.includes("APAC ");
+        
+        if (!hasUS && !hasEU && !hasAPAC) { hasUS = true; hasEU = true; hasAPAC = true; }
+        
+        const options = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+        if (hasUS) timeStringsArray.push(cleanFriendlyDate);
+        if (hasEU) {
+          const dateCEST = new Date(baseDate.getTime() + (9 * 60 * 60 * 1000));
+          timeStringsArray.push(dateCEST.toLocaleString('en-US', options).replace(',', '').replace(' at ', ', ') + " CEST");
+        }
+        if (hasAPAC) {
+          const dateJST = new Date(baseDate.getTime() + (16 * 60 * 60 * 1000));
+          timeStringsArray.push(dateJST.toLocaleString('en-US', options).replace(',', '').replace(' at ', ', ') + " JST");
+        }
       }
-    } catch(e){}
+    } catch(e) {
+      console.error("Time token compiler error: " + e.toString());
+    }
   }
-
-  let topBannerMarkup = isStatusCast 
-    ? '' 
-    : `<div style="display: block; width: 100%; max-width: 650px;"><img src="${topBannerImageUrl}" alt="Veeva Systems" style="display: block; width: 100%; height: auto; border: 0;" width="650" /></div>`;
-    
-  let bottomBannerMarkup = isStatusCast 
-    ? '' 
-    : `<div style="display: block; width: 100%; max-width: 650px; margin-top: 5px; margin-bottom: 5px;"><img src="${bottomBannerImageUrl}" alt="" style="display: block; width: 100%; height: auto; border: 0;" width="650" /></div>`;
 
   return `
     <div style="font-family: Arial, Helvetica, sans-serif; max-width: 650px; margin: auto; color: #333333; background-color: #ffffff; padding: 10px;">
@@ -272,8 +255,8 @@ function buildUnifiedHtmlBody(formData, isStatusCast) {
         <h2 style="text-align: center; color: #000000; font-size: 22px; font-weight: bold; margin-top: 0; margin-bottom: 20px; font-family: Arial, sans-serif;">${cleanSubject}</h2>
         <p style="line-height: 1.5; font-size: 14px; color: #333333; margin-bottom: 25px;">${description}</p>
         <table style="width: 100%; border-collapse: collapse; font-size: 14px; font-family: Arial, sans-serif;">
-          <tr><td style="padding: 4px 0;"><strong>What:</strong> Veeva Vault ${rawVersion}</td></tr>
-          <tr><td style="padding: 4px 0;"><strong>When:</strong> <a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline;">${cleanFriendlyDate}${cestDateString}</a></td></tr>
+          <tr><td style="padding: 4px 0;"><strong>What:</strong> Veeva Vault ${shortVersion}</td></tr>
+          <tr><td style="padding: 4px 0;"><strong>When:</strong> <a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline;">${timeStringsArray.length > 0 ? timeStringsArray.join(' / ') : cleanFriendlyDate}</a></td></tr>
           ${dynamicDowntimeRowMarkup}
           <tr><td style="padding: 4px 0;"><strong>Affected PODs:</strong> <span style="text-decoration: underline;">${regionHeaderPrefix}</span></td></tr>
         </table>
@@ -306,29 +289,26 @@ function processPushRequest(formData) {
     const compiledSubjectWithVersion = cleanSubject.trim() + " - " + rawVersion.trim();
     const finalHtmlBody = buildUnifiedHtmlBody(formData, false);
 
-    const payload = {
-      "name": compiledSubjectWithVersion, 
-      "email_config": { 
-        "subject": compiledSubjectWithVersion, 
-        "html_content": finalHtmlBody, 
-        "generate_plain_content": true,
-        "custom_unsubscribe_url": "https://platform.veevavault.help/en/lr/7239/#notification-email",
-        "sender_id": targetSenderId,
-        "tracking_settings": {
-          "open_tracking": { "enable": false },
-          "click_tracking": { "enable": false }
-        }
-      }
-    };
-
-    const options = {
+    const response = UrlFetchApp.fetch("https://api.sendgrid.com/v3/marketing/singlesends", {
       "method": "post",
       "headers": { "Authorization": "Bearer " + SENDGRID_API_KEY, "Content-Type": "application/json" },
-      "payload": JSON.stringify(payload),
+      "payload": JSON.stringify({
+        "name": compiledSubjectWithVersion, 
+        "email_config": { 
+          "subject": compiledSubjectWithVersion, 
+          "html_content": finalHtmlBody, 
+          "generate_plain_content": true,
+          "custom_unsubscribe_url": "https://platform.veevavault.help/en/lr/7239/#notification-email",
+          "sender_id": targetSenderId,
+          "tracking_settings": {
+            "open_tracking": { "enable": false },
+            "click_tracking": { "enable": false }
+          }
+        }
+      }),
       "muteHttpExceptions": true
-    };
+    });
 
-    const response = UrlFetchApp.fetch("https://api.sendgrid.com/v3/marketing/singlesends", options);
     if (response.getResponseCode() >= 400) throw new Error("SendGrid Refused Payload: " + response.getContentText());
     return { status: 'success' };
   } catch (err) {
@@ -337,50 +317,58 @@ function processPushRequest(formData) {
 }
 
 /**
- * STATUSCAST INTERACTION ROUTER - PRODUCTION INTEGRATED
+ * STATUSCAST INTERACTION ROUTER - MULTI-USER DYNAMIC ROUTING CONFIGURATION
  */
 function processTrustPushRequest(formData) {
   try {
     if (!formData) formData = {};
-    var scriptProperties = PropertiesService.getScriptProperties();
-    var apiKey = scriptProperties.getProperty('StatusCastTrustProdAPIKey');
-    var fullDomain = scriptProperties.getProperty('StatusCastPageID'); 
+    const scriptProperties = PropertiesService.getScriptProperties();
     
-    if (!apiKey || !fullDomain) {
-      throw new Error("Required configurations missing from Script Properties.");
-    }
+    const rawApiKey = scriptProperties.getProperty('StatusCastProdTrustAPIKey');
+    const fullDomain = scriptProperties.getProperty('StatusCastPageID'); 
     
-    var incidentUrl = "https://" + fullDomain + "/api/v4/incident";
-    var now = new Date();
-    var currentIsoDate = now.toISOString();
-    var timeToken = now.toTimeString().split(' ')[0];
+    if (!rawApiKey) throw new Error("StatusCast Connection Failure: The environment variable 'StatusCastProdTrustAPIKey' is missing or blank in your Google Script Properties.");
+    if (!fullDomain) throw new Error("StatusCast Connection Failure: The environment variable 'StatusCastPageID' is missing or blank in your Google Script Properties.");
     
-    var title = formData.subjectLine || "Veeva Vault Maintenance Release Notification";
-    var rawVersion = formData.version || "26R1.0.22";
-    var statusType = formData.statusCastType || "Maintenance";
+    const apiKey = String(rawApiKey).trim();
+    const incidentUrl = "https://" + String(fullDomain).trim() + "/api/v4/incident";
     
-    var shortTag = "UNV";
-    if (statusType === "Performance Degraded" || statusType === "Performance Degradation") shortTag = "DEG";
+    const now = new Date();
+    const currentIsoDate = now.toISOString();
+    const timeToken = now.toTimeString().split(' ')[0];
+    
+    const title = formData.subjectLine || "Veeva Vault Maintenance Release Notification";
+    const rawVersion = formData.version || "26R1.0.22";
+    const statusType = formData.statusCastType || "Maintenance";
+    
+    let shortTag = "UNV";
+    if (statusType.startsWith("Performance Degraded")) shortTag = "DEG";
     if (statusType === "Maintenance") shortTag = "MNT";
     if (statusType === "Informational") shortTag = "INF";
     
-    var uniqueTitle = shortTag + ": " + title + " - " + rawVersion + " (" + timeToken + ")";
-
-    // Dynamic Sheet Ingestion Mapping
-    var sheetData = fetchPodDataFromSheet();
-    var realComponentIds = [];
-    var affectedPodsText = formData.affectedPods || "";
+    const uniqueTitle = `${shortTag}: ${title} - ${rawVersion} (${timeToken}) [via System]`;
+    const sheetData = fetchPodDataFromSheet();
     
-    if (sheetData && sheetData.status === 'success' && sheetData.podMetadata) {
-      Object.keys(sheetData.podMetadata).forEach(function(podKey) {
-        var metadata = sheetData.podMetadata[podKey];
-        if (metadata.trustId && metadata.trustId.trim() !== "") {
-          var escapedKey = podKey.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-          var regex = new RegExp("\\b" + escapedKey + "\\b", "i");
+    if (!sheetData || sheetData.status !== 'success') {
+      throw new Error("Sheet Engine Disconnect: Failed to pull underlying data components from the linked Google Sheet.");
+    }
+    
+    const realComponentIds = [];
+    const affectedPodsText = formData.affectedPods || "";
+    
+    if (sheetData.podMetadata) {
+      const cleanTextAreaContent = affectedPodsText.replace(/<\/?[^>]+(>|$)/g, " ").trim();
+      
+      // OPTIMIZATION: Extracted matching mechanism to avoid recreating RegExp in loop contexts
+      Object.keys(sheetData.podMetadata).forEach(podKey => {
+        const metadata = sheetData.podMetadata[podKey];
+        if (metadata.trustId && !["", "#N/A", "NAN"].includes(metadata.trustId.trim().toUpperCase())) {
+          const escapedKey = podKey.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+          const strictPodRegex = new RegExp("(?:^|\\s|,|:)" + escapedKey + "(?:$|\\s|,|:)", "i");
           
-          if (regex.test(affectedPodsText)) {
-            var numericId = parseInt(metadata.trustId, 10);
-            if (!isNaN(numericId) && realComponentIds.indexOf(numericId) === -1) {
+          if (strictPodRegex.test(cleanTextAreaContent)) {
+            const numericId = parseInt(metadata.trustId.trim(), 10);
+            if (!isNaN(numericId) && !realComponentIds.includes(numericId)) {
               realComponentIds.push(numericId);
             }
           }
@@ -388,149 +376,70 @@ function processTrustPushRequest(formData) {
       });
     }
 
-    // Static Hardcoded Fallbacks (Production Parent Structural Infrastructure Elements)
-    var structuralFallbacks = {
-      "Veeva Vault": 64601,
-      "Vault-US PODs": 536510
+    if (realComponentIds.length === 0) {
+      throw new Error("Payload Generation Blocked: The POD text entered could not be mapped to any numeric Component IDs in Column K of your tracking sheet.");
+    }
+
+    const structuredEmailHtmlMessage = buildUnifiedHtmlBody(formData, true);
+    
+    // OPTIMIZATION: Unified the payload construction down to a clean structural skeleton
+    const incidentPayload = {
+      "title": uniqueTitle,
+      "isPublished": false, 
+      "treatAsDowntime": false,     
+      "sendNotifications": false,        
+      "externalId": "",
+      "affectedComponents": realComponentIds, 
+      "affectedGroups": [],
+      "customFields": [],
+      "posts": [{
+        "text": structuredEmailHtmlMessage,              
+        "date": currentIsoDate,       
+        "isPublished": false,          
+        "postType": statusType === "Maintenance" ? "Informational" : "Investigating"
+      }]
     };
 
-    if (realComponentIds.length === 0) {
-      if (affectedPodsText.toUpperCase().includes("US")) {
-        realComponentIds.push(structuralFallbacks["Vault-US PODs"]);
-      } else {
-        realComponentIds.push(structuralFallbacks["Veeva Vault"]);
-      }
-    }
-
-    var structuredEmailHtmlMessage = buildUnifiedHtmlBody(formData, true);
-    var incidentPayload = {};
-
+    // Apply conditional properties depending on type context
     if (statusType === "Unavailable") {
-      incidentPayload = {
-        "incidentType": "ServiceUnavailable",          
-        "title": uniqueTitle,
-        "isPublished": false, 
-        "treatAsDowntime": false,     
-        "sendNotifications": false,        
-        "externalId": "",
-        "affectedComponents": realComponentIds, 
-        "affectedGroups": [],
-        "customFields": [],
-        "posts": [{
-          "text": structuredEmailHtmlMessage,              
-          "date": currentIsoDate,       
-          "isPublished": false,          
-          "postType": "Investigating",               
-          "newComponentStatus": "Unavailable",  
-          "customFields": []
-        }]
+      incidentPayload.incidentType = "ServiceUnavailable";
+      incidentPayload.newComponentStatus = "Unavailable";
+    } else if (statusType.startsWith("Performance Degraded")) {
+      incidentPayload.incidentType = "ServiceUnavailable";
+      incidentPayload.newComponentStatus = "DegradedPerformance";
+    } else if (statusType === "Maintenance") {
+      incidentPayload.incidentType = "ScheduledMaintenance";
+      incidentPayload.newComponentStatus = "Maintenance";
+      incidentPayload.startDate = new Date(now.getTime() + (24 * 60 * 60 * 1000)).toISOString();
+      incidentPayload.endDate = new Date(now.getTime() + (28 * 60 * 60 * 1000)).toISOString();
+      incidentPayload.assignedUserEmail = "your-statuscast-admin-email@company.com";
+      incidentPayload.scheduledMaintenance = {
+        "estimatedDurationMinutes": 240,
+        "autoClose": false, 
+        "reminders": [
+          { "amount": 4, "unit": "Hours" },
+          { "amount": 2, "unit": "Days" }
+        ]
       };
-    } 
-    else if (statusType === "Performance Degraded" || statusType === "Performance Degradation") {
-      incidentPayload = {
-        "incidentType": "PerformanceDegradation",          
-        "title": uniqueTitle,
-        "isPublished": false,              
-        "treatAsDowntime": false,     
-        "sendNotifications": false,        
-        "externalId": "",
-        "affectedComponents": realComponentIds, 
-        "affectedGroups": [],
-        "customFields": [],
-        "posts": [{
-          "text": structuredEmailHtmlMessage,              
-          "date": currentIsoDate,       
-          "isPublished": false,          
-          "postType": "Investigating",               
-          "newComponentStatus": "DegradedPerformance", 
-          "customFields": []
-        }]
-      };
-    } 
-    else if (statusType === "Maintenance") {
-      var startWindow = new Date(now.getTime() + (24 * 60 * 60 * 1000)); 
-      var endWindow = new Date(now.getTime() + (28 * 60 * 60 * 1000));   
-
-      incidentPayload = {
-        "incidentType": "ScheduledMaintenance",
-        "title": uniqueTitle,
-        "isPublished": false,              
-        "sendNotifications": false,
-        "treatAsDowntime": false,
-        "externalId": "",
-        "autocloseMessage": "",
-        "startDate": startWindow.toISOString(),
-        "endDate": endWindow.toISOString(),
-        "estimatedDurationMinutes": 240, 
-        "affectedComponents": realComponentIds, 
-        "affectedGroups": [],
-        "customFields": [],
-        "scheduledMaintenance": {
-          "estimatedDurationMinutes": 240,
-          "notifyOnPublish": false,
-          "notifyDaysBefore": 0,
-          "notifyHoursBefore": 0,
-          "autoCloseAfterEstimatedDuration": false,
-          "recurringMaintenance": false
-        },
-        "posts": [{
-          "text": structuredEmailHtmlMessage,              
-          "date": currentIsoDate,       
-          "isPublished": false,          
-          "postType": "Informational", 
-          "newComponentStatus": "Maintenance", 
-          "customFields": []
-        }]
-      };
-    } 
-    else { 
-      incidentPayload = {
-        "incidentType": "Informational",          
-        "title": uniqueTitle,
-        "isPublished": false,              
-        "treatAsDowntime": false,     
-        "sendNotifications": false,        
-        "externalId": "",
-        "affectedComponents": realComponentIds, 
-        "affectedGroups": [],
-        "customFields": [],
-        "posts": [{
-          "text": structuredEmailHtmlMessage,              
-          "date": currentIsoDate,       
-          "isPublished": false,          
-          "postType": "Informational",               
-          "newComponentStatus": "Informational",  
-          "customFields": []
-        }]
-      };
+    } else {
+      incidentPayload.incidentType = "Informational";
+      incidentPayload.newComponentStatus = "Informational";
     }
 
-    var incidentOptions = {
+    const response = UrlFetchApp.fetch(incidentUrl, {
       "method": "post",
       "contentType": "application/json",
-      "headers": { "Authorization": "Bearer " + apiKey, "accept": "application/json" },
+      "headers": { 
+        "Authorization": apiKey.toLowerCase().startsWith("bearer ") ? apiKey : "Bearer " + apiKey, 
+        "accept": "application/json" 
+      },
       "payload": JSON.stringify(incidentPayload),
       "muteHttpExceptions": true
-    };
+    });
     
-    var response = UrlFetchApp.fetch(incidentUrl, incidentOptions);
-    if (response.getResponseCode() >= 400) throw new Error("StatusCast Refused Payload: " + response.getContentText());
+    if (response.getResponseCode() >= 400) throw new Error("StatusCast Server Rejection: " + response.getContentText());
     return { status: 'success' };
   } catch (err) {
     throw new Error(err.message);
   }
-
-}
-
-// THIS IS A DUMMY FUNCTION TO FORCE GOOGLE TO SHOW THE PERMISSION POPUP
-function ADMIN_FORCE_AUTH_TRIGGER() {
-  const dummyUrl = "https://docs.google.com/spreadsheets/d/1IHhaFXSFqKtwOfmBANlxss8Hp738SyRPncjhAbUaJo/edit";
-  
-  // Forces Google to scan the Spreadsheet permission token
-  const ss = SpreadsheetApp.openByUrl(dummyUrl); 
-  
-  // Forces Google to scan the Drive permission token
-  const driveCheck = DriveApp.getRootFolder(); 
-  
-  console.log("If you see this, authorization was successful!");
 }
