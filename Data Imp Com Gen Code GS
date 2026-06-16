@@ -1,0 +1,239 @@
+/**
+ * Creates a custom menu in the Google Sheets UI.
+In Script.Google under "Data Import for Comm Gen"
+ */
+function createMyMenu() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('🚀 Automation')
+    .addItem('Sync to Reference Replica', 'mapFieldsByHeader')
+    .addSeparator()
+    .addItem('Clear Reference Replica', 'clearReferenceSheet')
+    .addToUi();
+}
+
+/**
+ * Main function to map data from 'VMC Export' to 'Reference Replica'.
+ */
+function mapFieldsByHeader() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sourceSheet = ss.getSheetByName("VMC Export");
+  const targetSheet = ss.getSheetByName("Reference Replica");
+  const statusCastSheet = ss.getSheetByName("StatusCastIds");
+
+  if (!sourceSheet || !targetSheet) {
+    SpreadsheetApp.getUi().alert("Error: Tabs 'VMC Export' or 'Reference Replica' not found.");
+    return;
+  }
+
+  // --- NEW: Load StatusCastIds mapping if the sheet exists ---
+  const statusCastMap = {};
+  if (statusCastSheet) {
+    const scValues = statusCastSheet.getDataRange().getValues();
+    // Assuming row 1 has headers; starting from row 2 (index 1)
+    for (let i = 1; i < scValues.length; i++) {
+      const colA = (scValues[i][0] || "").toString().trim(); // Key from Col A
+      const colB = (scValues[i][1] || "").toString().trim(); // Value from Col B
+      if (colA) {
+        statusCastMap[colA] = colB;
+      }
+    }
+  }
+
+  const sourceValues = sourceSheet.getDataRange().getValues();
+  if (sourceValues.length < 2) return;
+
+  const sourceHeaders = sourceValues[0].map(h => h.toString().trim().toLowerCase());
+  const sourceRows = sourceValues.slice(1);
+  const targetHeadersRaw = targetSheet.getRange(1, 1, 1, targetSheet.getLastColumn()).getValues()[0];
+  const targetHeadersClean = targetHeadersRaw.map(h => h.toString().trim().toLowerCase());
+  
+  // Mapping Column Indices
+  const productIdx = targetHeadersClean.indexOf("product");
+  const upgradeIdx = targetHeadersClean.indexOf("upgrade mode");
+  const deployIdx = targetHeadersClean.indexOf("deploy time");
+  const regionIdx = targetHeadersClean.indexOf("region");
+  const earlyPodIdx = targetHeadersClean.indexOf("early pod");
+  
+  const locSrcIdx = sourceHeaders.indexOf("location");
+  const pgSrcIdx = sourceHeaders.indexOf("vault pod group");
+  const vtSrcIdx = sourceHeaders.indexOf("vault types");
+  const descSrcIdx = sourceHeaders.indexOf("description");
+
+  // Fields to map directly
+  const fieldsToMap = ["vault pod group", "release", "pod", "vault types", "location"];
+  const colMap = fieldsToMap.map(f => ({
+    src: sourceHeaders.indexOf(f),
+    trg: targetHeadersClean.indexOf(f)
+  }));
+
+  // Headers allowed to be blank (No red highlight)
+  const exceptions = ["vault pod group", "early pod", "lr time"].map(e => e.toLowerCase());
+
+  const backgroundColors = [];
+  let debugMsg = ""; 
+
+  const outputData = sourceRows.map((row, rowIndex) => {
+    // Dynamically size row array based on headers count (minimum 11 to ensure Column K / index 10 exists)
+    const rowLength = Math.max(targetHeadersClean.length, 11);
+    let newRow = new Array(rowLength).fill(""); 
+
+    // 1. Direct Mapping
+    colMap.forEach(m => {
+      if (m.src !== -1 && m.trg !== -1) newRow[m.trg] = row[m.src];
+    });
+
+    // 2. Logic for Product (Updated Priority)
+    const pgVal = (row[pgSrcIdx] || "").toString().trim();
+    const descVal = (row[descSrcIdx] || "").toString().trim().toLowerCase();
+
+    if (productIdx !== -1) {
+      if (descVal.includes("lims vault basics")) {
+        newRow[productIdx] = "Vault Lims Basics"; // Custom mapping
+      } else if (descVal.includes("lims basics")) {
+        newRow[productIdx] = "LIMS Basics";
+      } else if (descVal.includes("vault basics")) {
+        newRow[productIdx] = "Vault Basics";
+      } else if (pgVal !== "") {
+        newRow[productIdx] = pgVal.split('-')[0]; 
+      }
+    }
+
+    // 3. Logic for Deploy Time
+    if (deployIdx !== -1) {
+      if (pgVal !== "") {
+        const parts = pgVal.split('-');
+        if (parts.length >= 3 && parts[2]) {
+          const id = parts[2].charAt(0).toUpperCase(); 
+          const tMap = { 'A': '5:00 PM', 'B': '4:00 PM', 'C': '10:00 AM' };
+          newRow[deployIdx] = tMap[id] || "Other";
+        } else {
+          newRow[deployIdx] = "Other";
+        }
+      } else {
+        newRow[deployIdx] = "Other";
+      }
+    }
+
+    // 4. Logic for Early Pod
+    if (earlyPodIdx !== -1 && pgVal !== "") {
+      const parts = pgVal.split('-');
+      if (parts.length >= 3) {
+        const rawCode = parts[2].split('_')[0].trim().toUpperCase(); 
+        const earlyMap = { 'E': 'Early', 'E1': 'R1', 'E2': 'R2', 'E3': 'R3' };
+        newRow[earlyPodIdx] = earlyMap[rawCode] || "";
+      }
+    }
+
+    // 5. Region Mapping
+    const locVal = (row[locSrcIdx] || "").toString().trim();
+    if (locVal !== "" && regionIdx !== -1) {
+      const firstPart = locVal.split('-')[0].toLowerCase();
+      const rMap = { 'us': 'US', 'eu': 'EU', 'ap': 'APAC' };
+      newRow[regionIdx] = rMap[firstPart] || "NA";
+    } else if (regionIdx !== -1) {
+      newRow[regionIdx] = "NA";
+    }
+
+    // 6. Upgrade Mode Mapping
+    const vType = (row[vtSrcIdx] || "").toString().trim().toLowerCase();
+    if (upgradeIdx !== -1) {
+      if (vType === "production") newRow[upgradeIdx] = "VBV";
+      else if (vType === "sandbox") newRow[upgradeIdx] = "Classic";
+    }
+
+    // --- NEW: 7. StatusCastIds Look-up Mapping ---
+    // Match StatusCastIds Col A to Reference Replica Column C (Index 2) 
+    // And populate into Reference Replica Column K (Index 10)
+    const colCValue = (newRow[2] || "").toString().trim(); 
+    if (colCValue && statusCastMap[colCValue]) {
+      newRow[10] = statusCastMap[colCValue];
+    }
+
+    // --- HIGHLIGHT LOGIC ---
+    let rowNeedsHighlight = false;
+    for (let i = 0; i < targetHeadersClean.length; i++) {
+      let hName = targetHeadersClean[i];
+      if (hName === "" || exceptions.includes(hName)) continue;
+      
+      const val = (newRow[i] || "").toString().trim();
+      if (val === "") {
+        rowNeedsHighlight = true;
+        if (!debugMsg) {
+          debugMsg = "First missing value at Row " + (rowIndex + 2) + " in column: '" + targetHeadersRaw[i] + "'";
+        }
+        break; 
+      }
+    }
+
+    const rowColor = rowNeedsHighlight ? "#ea9999" : "#ffffff"; 
+    backgroundColors.push(new Array(newRow.length).fill(rowColor));
+    return newRow;
+  });
+
+  clearReferenceSheet(false); 
+
+  if (outputData.length > 0) {
+    // targetHeadersClean.length is dynamic, but we use outputData[0].length to account for up to Column K
+    const finalColCount = outputData[0].length;
+    const range = targetSheet.getRange(2, 1, outputData.length, finalColCount);
+    range.setValues(outputData);
+    range.setBackgrounds(backgroundColors);
+    
+    refreshPivotTables();
+
+    if (debugMsg) {
+      SpreadsheetApp.getUi().alert("⚠️ Missing Data Detected\n" + debugMsg);
+    } else {
+      ss.toast("Sync complete and Pivot Tables refreshed!", "🚀 Success", 3);
+    }
+  }
+}
+
+/**
+ * Clears the target sheet and resets background color.
+ */
+function clearReferenceSheet(showAlert = true) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const targetSheet = ss.getSheetByName("Reference Replica");
+  if (!targetSheet) return;
+
+  const lastRow = targetSheet.getLastRow();
+  const lastCol = targetSheet.getLastColumn();
+
+  if (lastRow > 1) {
+    targetSheet.getRange(2, 1, lastRow - 1, Math.max(lastCol, 11))
+               .clearContent()
+               .setBackground("#ffffff"); 
+  }
+
+  if (showAlert) {
+    ss.toast("Reference Replica cleared.", "Done");
+  }
+}
+
+/**
+ * Updates all pivot tables referencing the 'Reference Replica' sheet.
+ */
+function refreshPivotTables() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sourceSheet = ss.getSheetByName("Reference Replica");
+  if (!sourceSheet) return;
+
+  const lastRow = sourceSheet.getLastRow();
+  const lastCol = sourceSheet.getLastColumn();
+  if (lastRow < 2) return; 
+  
+  const sourceRange = sourceSheet.getRange(1, 1, lastRow, lastCol);
+  const allSheets = ss.getSheets();
+
+  allSheets.forEach(sheet => {
+    const pivots = sheet.getPivotTables();
+    pivots.forEach(pivot => {
+      try {
+        pivot.setSourceDataRange(sourceRange);
+      } catch (e) {
+        console.warn("Could not refresh pivot on sheet: " + sheet.getName());
+      }
+    });
+  });
+}
