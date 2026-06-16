@@ -86,27 +86,29 @@ function fetchPodDataFromSheet() {
       let currentPodGroup = (podGroupColIndex !== -1) ? String(rows[i][podGroupColIndex]).trim() : "";
       let currentTrustId = (trustIdColIndex !== -1) ? String(rows[i][trustIdColIndex]).trim() : "";
 
-      if (currentPod !== "" && currentPodGroup !== "") {
-        podValues.push(currentPod);
-        
-        if (!currentRegion) currentRegion = "Unknown";
-        if (!currentRelease) currentRelease = "Unknown";
-        if (!currentProduct) currentProduct = "Unknown";
-
-        if (currentRegion !== "NA") regionsSet.add(currentRegion);
-        releasesSet.add(currentRelease);
-        
-        if (currentProduct !== "Unknown" && currentProduct !== "Vault Basics" && currentProduct !== "") {
-          productsSet.add(currentProduct);
-        }
-
-        podMetadata[currentPod] = {
-          region: currentRegion,
-          release: currentRelease,
-          product: currentProduct,
-          trustId: currentTrustId
-        };
+      if (currentPod === "" || /^\d+$/.test(currentPod) || currentPodGroup === "") {
+        continue;
       }
+
+      podValues.push(currentPod);
+      
+      if (!currentRegion) currentRegion = "Unknown";
+      if (!currentRelease) currentRelease = "Unknown";
+      if (!currentProduct) currentProduct = "Unknown";
+
+      if (currentRegion !== "NA") regionsSet.add(currentRegion);
+      releasesSet.add(currentRelease);
+      
+      if (currentProduct !== "Unknown" && currentProduct !== "Vault Basics" && currentProduct !== "") {
+        productsSet.add(currentProduct);
+      }
+
+      podMetadata[currentPod] = {
+        region: currentRegion,
+        release: currentRelease,
+        product: currentProduct,
+        trustId: currentTrustId
+      };
     }
     
     let finalUniqueProducts = [...productsSet].sort();
@@ -175,6 +177,9 @@ function buildUnifiedHtmlBody(formData, isStatusCast) {
     ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/f8bb1bde-21f8-4910-a6b4-ae373a014261/1578x50.png"
     : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/66c81663-cafb-4ec2-851d-b6c10e25dfba/779x25.png";
 
+  const topBannerMarkup = `<img src="${topBannerImageUrl}" alt="Top Banner" style="width: 100%; max-width: 650px; height: auto; display: block;" />`;
+  const bottomBannerMarkup = `<img src="${bottomBannerImageUrl}" alt="Bottom Banner" style="width: 100%; max-width: 650px; height: auto; display: block;" />`;
+
   let description = "Veeva Vault is scheduled to be upgraded to the latest maintenance release. There is no expected downtime, however, a short service interruption may be experienced.";
   let dynamicDowntimeRowMarkup = "";
   if (cleanReleaseType === "Downtime Required") {
@@ -223,7 +228,7 @@ function buildUnifiedHtmlBody(formData, isStatusCast) {
 
   const worldClockUrl = "https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&amp;iso=" + cleanIso + "&amp;sort=1";
 
-  // DYNAMIC REGIONAL TIMEZONE COMPILER (JST Updated)
+  // DYNAMIC REGIONAL TIMEZONE COMPILER
   let timeStringsArray = [];
   
   if (cleanIso && cleanIso.length >= 11) {
@@ -252,7 +257,7 @@ function buildUnifiedHtmlBody(formData, isStatusCast) {
           timeStringsArray.push(formattedCEST);
         }
         if (hasAPAC) {
-          let dateJST = new Date(baseDate.getTime() + (16 * 60 * 60 * 1000)); // PDT + 16 Hours = JST
+          let dateJST = new Date(baseDate.getTime() + (16 * 60 * 60 * 1000)); 
           let optionsJST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
           let formattedJST = dateJST.toLocaleString('en-US', optionsJST).replace(',', '').replace(' at ', ', ') + " JST";
           timeStringsArray.push(formattedJST);
@@ -337,28 +342,51 @@ function processPushRequest(formData) {
 }
 
 /**
- * STATUSCAST INTERACTION ROUTER - MULTI-USER DYNAMIC ROUTING CONFIGURATION
+ * STATUSCAST INTERACTION ROUTER WITH AUTOMATIC ALLOW-LIST VERIFICATION
  */
 function processTrustPushRequest(formData) {
   try {
     if (!formData) formData = {};
     var scriptProperties = PropertiesService.getScriptProperties();
     
-    var rawApiKey = scriptProperties.getProperty('StatusCastTrustAPIKey');
+    var rawApiKey = scriptProperties.getProperty('StatusCastProdTrustAPIKey');
     var fullDomain = scriptProperties.getProperty('StatusCastPageID'); 
     
     if (!rawApiKey || !fullDomain) {
-      throw new Error("Required configurations missing from Script Properties. Ensure StatusCastTrustAPIKey and StatusCastPageID are set.");
+      throw new Error("Required configurations missing from Script Properties.");
     }
     
     var apiKey = String(rawApiKey).trim();
-    var incidentUrl = "https://" + String(fullDomain).trim() + "/api/v4/incident";
+    var authorizationValue = apiKey.toLowerCase().startsWith("bearer ") ? apiKey : "Bearer " + apiKey;
     
+    // --- STEP 1: FETCH ACTIVE SYSTEM COMPONENTS FROM STATUSCAST LIVE ---
+    var componentsUrl = "https://" + String(fullDomain).trim() + "/api/v4/components";
+    var componentsResponse = UrlFetchApp.fetch(componentsUrl, {
+      "method": "get",
+      "headers": { "Authorization": authorizationValue, "accept": "application/json" },
+      "muteHttpExceptions": true
+    });
+
+    if (componentsResponse.getResponseCode() !== 200) {
+      throw new Error("Failed to authenticate or download active components map from StatusCast API.");
+    }
+
+    // Map active component IDs into a lightning-fast validation Set
+    var activeComponentsData = JSON.parse(componentsResponse.getContentText());
+    var validStatusCastIds = new Set();
+    
+    if (Array.isArray(activeComponentsData)) {
+      activeComponentsData.forEach(function(comp) {
+        if (comp.id) validStatusCastIds.add(Number(comp.id));
+      });
+    }
+
+    // --- STEP 2: COMPILE INCIDENT STRUCUTRES ---
+    var incidentUrl = "https://" + String(fullDomain).trim() + "/api/v4/incident";
     var now = new Date();
     var currentIsoDate = now.toISOString();
     var timeToken = now.toTimeString().split(' ')[0];
     
-    // FIXED SYSTEM SENDER SETUP
     var currentUserEmail = "your-statuscast-admin-email@company.com"; 
     var userPrefix = "System"; 
     
@@ -373,13 +401,13 @@ function processTrustPushRequest(formData) {
     
     var uniqueTitle = shortTag + ": " + title + " - " + rawVersion + " (" + timeToken + ") [via " + userPrefix + "]";
 
-    // Dynamic Sheet Ingestion Mapping
     var sheetData = fetchPodDataFromSheet();
     var realComponentIds = [];
+    var droppedComponentLog = [];
     var affectedPodsText = formData.affectedPods || "";
     
     if (sheetData && sheetData.status === 'success' && sheetData.podMetadata) {
-      var cleanTextAreaContent = affectedPodsText.replace(/<\/?[^>]+(>|$)/g, " ").trim();
+      var cleanTextAreaContent = affectedPodsText.replace(/<\/?[^>]+(>|$)/g, " ").replace(/[\r\n]+/g, " ").trim();
       
       Object.keys(sheetData.podMetadata).forEach(function(podKey) {
         var metadata = sheetData.podMetadata[podKey];
@@ -390,120 +418,91 @@ function processTrustPushRequest(formData) {
             metadata.trustId.trim().toUpperCase() !== "NAN") {
           
           var escapedKey = podKey.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-          var strictPodRegex = new RegExp("(?:^|\\s|,|:)" + escapedKey + "(?:$|\\s|,|:)", "i");
+          var strictPodRegex = new RegExp("\\b" + escapedKey + "\\b", "i");
           
           if (strictPodRegex.test(cleanTextAreaContent)) {
-            var numericId = parseInt(metadata.trustId.trim(), 10);
-            if (!isNaN(numericId) && realComponentIds.indexOf(numericId) === -1) {
-              realComponentIds.push(numericId);
+            var numericId = Number(metadata.trustId.trim());
+            
+            // DYNAMIC ALLOW-LIST VERIFICATION CHECK
+            if (!isNaN(numericId)) {
+              if (validStatusCastIds.has(numericId)) {
+                if (realComponentIds.indexOf(numericId) === -1) {
+                  realComponentIds.push(numericId);
+                }
+              } else {
+                // Tracking dropped items automatically instead of hardcoding exclusions
+                droppedComponentLog.push("'" + podKey + "' (ID: " + numericId + ")");
+              }
             }
           }
         }
       });
     }
 
+    // If an invalid code completely stripped the selection array, inform the operator immediately
     if (realComponentIds.length === 0) {
-      throw new Error("Aborted payload transmission: No valid, numeric Production Component IDs matched your selected POD rows in Column K of the sheet.");
+      var errorLogString = droppedComponentLog.length > 0 ? "\nRejected elements discovered: " + droppedComponentLog.join(', ') : "";
+      throw new Error("Aborted submission: No active, matching component IDs found on your StatusCast platform instance for these selections." + errorLogString);
+    }
+
+    // Log ignored discrepancies in console background silently without disrupting the application thread
+    if (droppedComponentLog.length > 0) {
+      console.warn("Auto-filtered out inactive StatusCast IDs from payload transmission: " + JSON.stringify(droppedComponentLog));
     }
 
     var structuredEmailHtmlMessage = buildUnifiedHtmlBody(formData, true);
-    var incidentPayload = {};
+    
+    var incidentPayload = {
+      "title": uniqueTitle,
+      "isPublished": false, 
+      "treatAsDowntime": false,     
+      "sendNotifications": false,        
+      "externalId": "",
+      "affectedComponents": realComponentIds, 
+      "affectedGroups": [],
+      "customFields": [],
+      "posts": [{
+        "text": structuredEmailHtmlMessage,              
+        "date": currentIsoDate,       
+        "isPublished": false,          
+        "postType": "Informational"
+      }]
+    };
 
     if (statusType === "Unavailable") {
-      incidentPayload = {
-        "incidentType": "ServiceUnavailable",          
-        "newComponentStatus": "Unavailable",
-        "title": uniqueTitle,
-        "isPublished": false, 
-        "treatAsDowntime": false,     
-        "sendNotifications": false,        
-        "externalId": "",
-        "affectedComponents": realComponentIds, 
-        "affectedGroups": [],
-        "customFields": [],
-        "posts": [{
-          "text": structuredEmailHtmlMessage,              
-          "date": currentIsoDate,       
-          "isPublished": false,          
-          "postType": "Investigating"
-        }]
-      };
+      incidentPayload.incidentType = "ServiceUnavailable";
+      incidentPayload.newComponentStatus = "Unavailable";
+      incidentPayload.posts[0].postType = "Investigating";
     } 
     else if (statusType === "Performance Degraded" || statusType === "Performance Degradation") {
-      incidentPayload = {
-        "incidentType": "ServiceUnavailable",     
-        "newComponentStatus": "DegradedPerformance", 
-        "title": uniqueTitle,
-        "isPublished": false,              
-        "treatAsDowntime": false,     
-        "sendNotifications": false,        
-        "externalId": "",
-        "affectedComponents": realComponentIds, 
-        "affectedGroups": [],
-        "customFields": [],
-        "posts": [{
-          "text": structuredEmailHtmlMessage,              
-          "date": currentIsoDate,       
-          "isPublished": false,          
-          "postType": "Investigating"
-        }]
-      };
+      incidentPayload.incidentType = "ServiceUnavailable";
+      incidentPayload.newComponentStatus = "DegradedPerformance";
+      incidentPayload.posts[0].postType = "Investigating";
     } 
     else if (statusType === "Maintenance") {
       var startWindow = new Date(now.getTime() + (24 * 60 * 60 * 1000)); 
       var endWindow = new Date(now.getTime() + (28 * 60 * 60 * 1000));   
 
-      incidentPayload = {
-        "incidentType": "ScheduledMaintenance",
-        "newComponentStatus": "Maintenance",
-        "title": uniqueTitle,
-        "isPublished": false,              
-        "sendNotifications": false,
-        "treatAsDowntime": false,
-        "externalId": "",
-        "startDate": startWindow.toISOString(),
-        "endDate": endWindow.toISOString(),
-        "assignedUserEmail": currentUserEmail, 
-        "affectedComponents": realComponentIds, 
-        "affectedGroups": [],
-        "customFields": [],
-        "scheduledMaintenance": {
-          "estimatedDurationMinutes": 240,
-          "autoClose": false, 
-          "reminders": [
-            { "amount": 4, "unit": "Hours" },
-            { "amount": 2, "unit": "Days" }
-          ]
-        },
-        "posts": [{
-          "postType": "Informational",
-          "date": currentIsoDate,
-          "text": structuredEmailHtmlMessage
-        }]
+      incidentPayload.incidentType = "ScheduledMaintenance";
+      incidentPayload.newComponentStatus = "Maintenance";
+      incidentPayload.startDate = startWindow.toISOString();
+      incidentPayload.endDate = endWindow.toISOString();
+      incidentPayload.assignedUserEmail = currentUserEmail;
+      incidentPayload.scheduledMaintenance = {
+        "estimatedDurationMinutes": 240,
+        "autoClose": false, 
+        "reminders": [
+          { "amount": 4, "unit": "Hours" },
+          { "amount": 2, "unit": "Days" }
+        ]
       };
+      incidentPayload.posts[0].postType = "Informational";
     } 
     else { 
-      incidentPayload = {
-        "incidentType": "Informational",           
-        "newComponentStatus": "Informational",
-        "title": uniqueTitle,
-        "isPublished": false,              
-        "treatAsDowntime": false,     
-        "sendNotifications": false,        
-        "externalId": "",
-        "affectedComponents": realComponentIds, 
-        "affectedGroups": [],
-        "customFields": [],
-        "posts": [{
-          "text": structuredEmailHtmlMessage,              
-          "date": currentIsoDate,       
-          "isPublished": false,          
-          "postType": "Informational"
-        }]
-      };
+      incidentPayload.incidentType = "Informational";
+      incidentPayload.newComponentStatus = "Informational";
+      incidentPayload.posts[0].postType = "Informational";
     }
-
-    var authorizationValue = apiKey.toLowerCase().startsWith("bearer ") ? apiKey : "Bearer " + apiKey;
     
     var incidentOptions = {
       "method": "post",
@@ -517,7 +516,12 @@ function processTrustPushRequest(formData) {
     };
     
     var response = UrlFetchApp.fetch(incidentUrl, incidentOptions);
-    if (response.getResponseCode() >= 400) throw new Error("StatusCast Refused Payload: " + response.getContentText());
+    var responseCode = response.getResponseCode();
+    
+    if (responseCode >= 400) {
+      throw new Error("StatusCast Server Rejection: " + response.getContentText());
+    }
+    
     return { status: 'success' };
   } catch (err) {
     throw new Error(err.message);
