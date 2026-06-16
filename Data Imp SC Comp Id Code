@@ -1,0 +1,81 @@
+/**
+ * AUTOMATIC MENU GENERATOR
+ */
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('Update SC ID')
+    .addItem('Pull Data from StatusCast', 'populateStatusCastIds')
+    .addToUi();
+}
+
+/**
+ * PULL LIVE DATA TO 'StatusCastIds' TAB
+ */
+function populateStatusCastIds() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  let targetSheet = ss.getSheetByName("StatusCastIds");
+  if (!targetSheet) {
+    targetSheet = ss.insertSheet("StatusCastIds");
+  }
+  
+  try {
+    const scriptProperties = PropertiesService.getScriptProperties();
+    
+    // Explicitly targeting the Component-specific API key property
+    const apiKey = scriptProperties.getProperty('StatusCastComponentIDAPIKey') || scriptProperties.getProperty('StatusCastProdTrustAPIKey');
+    
+    if (!apiKey) {
+      throw new Error("Missing specific 'StatusCastComponentIDAPIKey' property in your Script Settings.");
+    }
+    
+    // Your verified support-tier endpoint route path format
+    const url = "https://veeva-trust.status.page/api/v4/components"; 
+    
+    const options = {
+      "method": "GET",
+      "headers": {
+        "Authorization": "Bearer " + apiKey.trim(),
+        "Accept": "application/json"
+      },
+      "muteHttpExceptions": true,
+      "validateHttpsCertificates": false 
+    };
+    
+    const response = UrlFetchApp.fetch(url, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    if (responseCode !== 200 || responseText.trim().startsWith("<!DOCTYPE")) {
+      throw new Error("Connection refused by instance portal (Code " + responseCode + "). Please double-check that 'StatusCastComponentIDAPIKey' is an active token.");
+    }
+    
+    const components = JSON.parse(responseText);
+    if (!Array.isArray(components)) {
+      throw new Error("Unexpected metadata response structure returned from server.");
+    }
+    
+    const outputData = [["Pod Group / Component Name", "Component ID"]]; 
+    
+    components.forEach(comp => {
+      const compName = comp.pathName || comp.name || "Unknown Component";
+      const compId = comp.id ? String(comp.id).trim() : "";
+      
+      if (compId) {
+        outputData.push([compName, compId]);
+      }
+    });
+    
+    targetSheet.clear();
+    targetSheet.getRange(1, 1, outputData.length, 2).setValues(outputData);
+    
+    targetSheet.getRange("A1:B1").setFontWeight("bold").setBackground("#e6effa");
+    targetSheet.autoResizeColumns(1, 2);
+    
+    ui.alert("Success", "Successfully populated " + (outputData.length - 1) + " rows into the 'StatusCastIds' tab using your Component API Token!", ui.ButtonSet.OK);
+    
+  } catch (error) {
+    ui.alert("StatusCast Sync Notice", error.message, ui.ButtonSet.OK);
+  }
+}
