@@ -1,14 +1,122 @@
 /**
- * Creates a custom menu in the Google Sheets UI.
-In Script.Google under "Data Import for Comm Gen"
+ * MASTER ONOPEN TRIGGER
+ * Automatically fires when the spreadsheet opens. 
+ * Combines both automation menus into a single startup sequence.
+ */
+function onOpen() {
+  // 1. Run the function from your SSCompID.gs file (e.g., to update SC IDs)
+  if (typeof updateSCID === "function") { 
+    updateSCID(); 
+  }
+  
+  // 2. Build your custom 🚀 Automation menu layout
+  createMyMenu();
+}
+
+/**
+ * Creates a custom menu in the Google Sheets UI with BOTH automation buttons.
  */
 function createMyMenu() {
   const ui = SpreadsheetApp.getUi();
+  
   ui.createMenu('🚀 Automation')
-    .addItem('Sync to Reference Replica', 'mapFieldsByHeader')
+    .addItem('Sync to Reference Replica (Local)', 'mapFieldsByHeader')   // Button 1
+    .addItem('Run Monthly API Sync (Automated)', 'automatedMonthlyUpdate') // Button 2
     .addSeparator()
     .addItem('Clear Reference Replica', 'clearReferenceSheet')
-    .addToUi();
+    .addToUi(); // This pushes everything onto your screen at once
+}
+
+/**
+ * Automatically runs monthly (or via menu) to fetch API data, 
+ * check for new records, append them, and email a summary.
+ */
+function automatedMonthlyUpdate() { 
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("VMC Export"); 
+  const userEmail = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
+  
+  if (!sheet) {
+    Logger.log("⚠️ Error: 'VMC Export' sheet was not found.");
+    return;
+  }
+  
+  // 1. Fetch data from your StatusCast API for monthly Refresh of data. 
+  const scriptProps = PropertiesService.getScriptProperties();
+  const apiKey = scriptProps.getProperty('StatusCastComponentIDAPIKey');
+  const pageId = scriptProps.getProperty('StatusCastPageID');
+  
+  if (!apiKey || !pageId) {
+    Logger.log("⚠️ Error: 'StatusCastComponentIDAPIKey' or 'StatusCastPageID' was not found in your Script Properties.");
+    return; 
+  }
+
+  const apiUrl = `https://${pageId}.statuscast.com/api/v4/components`;
+  
+  let apiData;
+  try {
+    const options = {
+      "method": "get",
+      "headers": {
+        "Authorization": "Bearer " + apiKey,
+        "Accept": "application/json"
+      },
+      "muteHttpExceptions": true
+    };
+
+    const response = UrlFetchApp.fetch(apiUrl, options);
+    
+    if (response.getResponseCode() !== 200) {
+      throw new Error("HTTP Status " + response.getResponseCode() + ": " + response.getContentText());
+    }
+    
+    apiData = JSON.parse(response.getContentText()); 
+    Logger.log("Successfully fetched API data using secure environment parameters.");
+    
+  } catch (e) {
+    Logger.log("API Fetch Failed: " + e.toString());
+    MailApp.sendEmail(userEmail, "Monthly App Sync: FAILED", `The automated sync failed.\nError: ${e.toString()}`);
+    return;
+  }
+
+  // 2. Get existing data from your Sheet
+  const sheetData = sheet.getDataRange().getValues();
+  
+  // Create a list/map of existing IDs to easily check for changes (ID in the first column)
+  const existingIds = sheetData.length > 1 ? sheetData.slice(1).map(row => row[0].toString().trim()) : []; 
+  
+  let changeLog = [];
+  let newRowsCount = 0;
+
+  // 3. Compare API data against Sheet data
+  apiData.forEach(newItem => {
+    const itemId = newItem.id.toString().trim(); 
+    
+    if (!existingIds.includes(itemId)) {
+      newRowsCount++;
+      changeLog.push(`• Added New Item: ID ${itemId} (${newItem.name || 'No Name'})`);
+      
+      // Append to the sheet (adjust fields to match your column order)
+      sheet.appendRow([newItem.id, newItem.name, newItem.status, new Date()]);
+    }
+  });
+
+  // 4. Send Confirmation Email if changes occurred
+  if (changeLog.length > 0) {
+    const emailSubject = "Communication Generator: Updates Detected";
+    let emailBody = `The monthly automated sync ran successfully.\n\n`;
+    emailBody += `Total new records added: ${newRowsCount}\n\n`;
+    emailBody += `Summary of Changes:\n` + changeLog.join("\n");
+    
+    MailApp.sendEmail(userEmail, emailSubject, emailBody);
+    Logger.log("Changes found. Email sent.");
+    
+    // Auto-trigger mapping engine since new rows were introduced
+    mapFieldsByHeader();
+  } else {
+    MailApp.sendEmail(userEmail, "Communication Generator: No Changes", "The monthly sync ran. No new updates were found in the SendGrid or the Trust data.");
+    Logger.log("No changes found.");
+  }
 }
 
 /**
@@ -21,18 +129,21 @@ function mapFieldsByHeader() {
   const statusCastSheet = ss.getSheetByName("StatusCastIds");
 
   if (!sourceSheet || !targetSheet) {
-    SpreadsheetApp.getUi().alert("Error: Tabs 'VMC Export' or 'Reference Replica' not found.");
+    if (SpreadsheetApp.getUi()) {
+      SpreadsheetApp.getUi().alert("Error: Tabs 'VMC Export' or 'Reference Replica' not found.");
+    } else {
+      Logger.log("Error: Tabs 'VMC Export' or 'Reference Replica' not found.");
+    }
     return;
   }
 
-  // --- NEW: Load StatusCastIds mapping if the sheet exists ---
+  // --- Load StatusCastIds mapping if the sheet exists ---
   const statusCastMap = {};
   if (statusCastSheet) {
     const scValues = statusCastSheet.getDataRange().getValues();
-    // Assuming row 1 has headers; starting from row 2 (index 1)
     for (let i = 1; i < scValues.length; i++) {
-      const colA = (scValues[i][0] || "").toString().trim(); // Key from Col A
-      const colB = (scValues[i][1] || "").toString().trim(); // Value from Col B
+      const colA = (scValues[i][0] || "").toString().trim(); 
+      const colB = (scValues[i][1] || "").toString().trim(); 
       if (colA) {
         statusCastMap[colA] = colB;
       }
@@ -66,14 +177,9 @@ function mapFieldsByHeader() {
     trg: targetHeadersClean.indexOf(f)
   }));
 
-  // Headers allowed to be blank (No red highlight)
-  const exceptions = ["vault pod group", "early pod", "lr time"].map(e => e.toLowerCase());
-
   const backgroundColors = [];
-  let debugMsg = ""; 
 
   const outputData = sourceRows.map((row, rowIndex) => {
-    // Dynamically size row array based on headers count (minimum 11 to ensure Column K / index 10 exists)
     const rowLength = Math.max(targetHeadersClean.length, 11);
     let newRow = new Array(rowLength).fill(""); 
 
@@ -88,7 +194,7 @@ function mapFieldsByHeader() {
 
     if (productIdx !== -1) {
       if (descVal.includes("lims vault basics")) {
-        newRow[productIdx] = "Vault Lims Basics"; // Custom mapping
+        newRow[productIdx] = "Vault Lims Basics"; 
       } else if (descVal.includes("lims basics")) {
         newRow[productIdx] = "LIMS Basics";
       } else if (descVal.includes("vault basics")) {
@@ -141,39 +247,20 @@ function mapFieldsByHeader() {
       else if (vType === "sandbox") newRow[upgradeIdx] = "Classic";
     }
 
-    // --- NEW: 7. StatusCastIds Look-up Mapping ---
-    // Match StatusCastIds Col A to Reference Replica Column C (Index 2) 
-    // And populate into Reference Replica Column K (Index 10)
+    // 7. StatusCastIds Look-up Mapping
     const colCValue = (newRow[2] || "").toString().trim(); 
     if (colCValue && statusCastMap[colCValue]) {
       newRow[10] = statusCastMap[colCValue];
     }
 
-    // --- HIGHLIGHT LOGIC ---
-    let rowNeedsHighlight = false;
-    for (let i = 0; i < targetHeadersClean.length; i++) {
-      let hName = targetHeadersClean[i];
-      if (hName === "" || exceptions.includes(hName)) continue;
-      
-      const val = (newRow[i] || "").toString().trim();
-      if (val === "") {
-        rowNeedsHighlight = true;
-        if (!debugMsg) {
-          debugMsg = "First missing value at Row " + (rowIndex + 2) + " in column: '" + targetHeadersRaw[i] + "'";
-        }
-        break; 
-      }
-    }
-
-    const rowColor = rowNeedsHighlight ? "#ea9999" : "#ffffff"; 
-    backgroundColors.push(new Array(newRow.length).fill(rowColor));
+    // Always keep background color clean white (Red highlight tracking removed)
+    backgroundColors.push(new Array(newRow.length).fill("#ffffff"));
     return newRow;
   });
 
   clearReferenceSheet(false); 
 
   if (outputData.length > 0) {
-    // targetHeadersClean.length is dynamic, but we use outputData[0].length to account for up to Column K
     const finalColCount = outputData[0].length;
     const range = targetSheet.getRange(2, 1, outputData.length, finalColCount);
     range.setValues(outputData);
@@ -181,10 +268,10 @@ function mapFieldsByHeader() {
     
     refreshPivotTables();
 
-    if (debugMsg) {
-      SpreadsheetApp.getUi().alert("⚠️ Missing Data Detected\n" + debugMsg);
-    } else {
+    try {
       ss.toast("Sync complete and Pivot Tables refreshed!", "🚀 Success", 3);
+    } catch(e) {
+      Logger.log("Sync complete natively.");
     }
   }
 }
