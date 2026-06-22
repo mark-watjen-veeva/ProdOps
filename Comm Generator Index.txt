@@ -400,38 +400,50 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
           return;
         }
 
-        let regionalMap = { "US": [], "EU": [], "APAC": [], "Unknown": [] };
+        let regionalNestedMap = {};
         
         checkedBoxes.forEach(cb => {
           let podName = cb.value;
           let region = cb.getAttribute('data-region') || 'Unknown';
           let release = cb.getAttribute('data-release') || 'Release';
           
-          if (!regionalMap[region]) regionalMap[region] = [];
-          regionalMap[region].push({ name: podName, release: release });
+          if (!regionalNestedMap[region]) {
+            regionalNestedMap[region] = {};
+          }
+          if (!regionalNestedMap[region][release]) {
+            regionalNestedMap[region][release] = [];
+          }
+          regionalNestedMap[region][release].push(podName);
         });
 
         const targetRegionOrder = ["US", "EU", "APAC"];
         let compiledLines = [];
 
+        function buildOutputLinesForRegion(regKey) {
+          if (!regionalNestedMap[regKey]) return;
+          
+          let releaseTypes = Object.keys(regionalNestedMap[regKey]).sort();
+          
+          releaseTypes.forEach(releaseTypeTag => {
+            let sortedPodNames = regionalNestedMap[regKey][releaseTypeTag].sort(naturalSort);
+            
+            let cleanTag = releaseTypeTag.toLowerCase().includes("release") ? releaseTypeTag : `${releaseTypeTag} Release`;
+            
+            compiledLines.push(`<u>${regKey} ${cleanTag}:</u> ${sortedPodNames.join(', ')}`);
+          });
+        }
+
         targetRegionOrder.forEach(regKey => {
-          let podList = regionalMap[regKey] || [];
-          if (podList.length > 0) {
-            let sortedPodNames = podList.map(item => item.name).sort(naturalSort);
-            let releaseTypeTag = podList[0].release; 
-            compiledLines.push(`<u>${regKey} ${releaseTypeTag} Release:</u> ${sortedPodNames.join(', ')}`);
+          buildOutputLinesForRegion(regKey);
+        });
+
+        Object.keys(regionalNestedMap).forEach(regKey => {
+          if (!targetRegionOrder.includes(regKey)) {
+            buildOutputLinesForRegion(regKey);
           }
         });
 
-        Object.keys(regionalMap).forEach(regKey => {
-          if (!targetRegionOrder.includes(regKey) && regionalMap[regKey].length > 0) {
-            let sortedPodNames = regionalMap[regKey].map(item => item.name).sort(naturalSort);
-            let releaseTypeTag = regionalMap[regKey][0].release;
-            compiledLines.push(`<u>${regKey} ${releaseTypeTag} Release:</u> ${sortedPodNames.join(', ')}`);
-          }
-        });
-
-        textArea.value = compiledLines.join('\n');
+        textArea.value = compiledLines.join('\n\n');
         updatePreview(); 
       }
 
@@ -478,7 +490,6 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
             let hasEU = currentPodsVal.includes("EU ");
             let hasAPAC = currentPodsVal.includes("APAC ");
             
-            // Locked absolute baseline entry point anchor string
             activeTimeStrings.push(friendlyDate);
             
             if (hasEU) {
@@ -525,7 +536,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
               if (activeHeadersFound.length > 0) {
                 regionHeaderPrefix = activeHeadersFound.join('/') + " PODs";
               }
-              htmlOutputLinesBlock = lines.join('<br/>');
+              htmlOutputLinesBlock = lines.join('<br/><br/>');
             }
           }
 
@@ -628,6 +639,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
         const confirmEl = document.getElementById('confirmUrl');
         if (confirmEl && !confirmEl.checked) { alert("Confirm active URL parameter."); return; }
         
+        // FIXED: Converts raw text newlines to functional <br/> HTML tags so platforms render the vertical spacing gaps perfectly
         const formDataPayload = {
           envTheme: getSafeValue('envTheme', 'PROD'), 
           releaseType: getSafeValue('releaseType', 'Maintenance Only'),
@@ -635,7 +647,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
           version: getSafeValue('releaseVersion', ''),
           friendlyDate: getSafeValue('friendlyDate', ''),
           isoString: getSafeValue('isoStringValue', ''),
-          affectedPods: getSafeValue('affectedPods', ''),
+          affectedPods: getSafeValue('affectedPods', '').replace(/\n/g, '<br/>'),
           notesUrl: getSafeValue('releaseNotes', ''),
           customNotesText: getSafeValue('emailNotes', ''),
           estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes')
@@ -670,6 +682,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
            }
         }
 
+        // FIXED: Converts raw text newlines to functional <br/> HTML tags so platforms render the vertical spacing gaps perfectly
         const formDataPayload = {
           envTheme: getSafeValue('envTheme', 'PROD'), 
           releaseType: getSafeValue('releaseType', 'Maintenance Only'),
@@ -678,7 +691,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
           version: getSafeValue('releaseVersion', ''),
           friendlyDate: getSafeValue('friendlyDate', ''),
           isoString: currentIso,
-          affectedPods: getSafeValue('affectedPods', ''),
+          affectedPods: getSafeValue('affectedPods', '').replace(/\n/g, '<br/>'),
           notesUrl: getSafeValue('releaseNotes', ''),
           customNotesText: getSafeValue('emailNotes', ''),
           estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes')
