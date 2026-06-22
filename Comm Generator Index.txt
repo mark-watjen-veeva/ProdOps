@@ -89,6 +89,9 @@
       .trust-btn:hover { background-color: #2d3748; }
       .trust-btn.success-state { background-color: #28a745 !important; box-shadow: 0 0 12px rgba(40,167,69,0.4); }
       
+      .clear-btn { background-color: #dc3545; color: white; width: 100%; margin-top: 15px; transition: all 0.2s ease; padding: 10px; font-size: 1em; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; text-align: center; outline: none; box-sizing: border-box; }
+      .clear-btn:hover { background-color: #bd2130; }
+      
       .filter-dashboard { background: #f0f4f8; padding: 12px; border: 1px solid #d0daf0; border-radius: 6px; margin-bottom: 5px; display: flex; flex-direction: column; gap: 8px; }
       .filter-section { display: flex; flex-direction: column; gap: 3px; }
       .filter-section span { font-size: 0.75em; font-weight: bold; color: #4a5568; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -126,7 +129,7 @@
             <option value="SBX">SBX (Sandbox Orange Banner)</option>
           </select>
 
-          <label style="color: #4a5568;">Trust Type Mapping Context</label>
+          <label style="color: #4a5568;">Trust Type</label>
           <select id="statusCastType">
             <option value="Maintenance" selected>Maintenance</option>
             <option value="Unavailable">Unavailable</option>
@@ -134,7 +137,7 @@
             <option value="Informational">Informational</option>
           </select>
 
-          <label>Subject Line / Appended Title</label>
+          <label>Subject Line</label>
           <span class="field-tooltip">💡 Title will automatically append the selected Release Version code suffix.</span>
           <input type="text" id="subjectLine" value="Veeva Vault Maintenance Release Notification" oninput="updatePreview()">
 
@@ -142,10 +145,10 @@
           <input type="text" id="releaseVersion" value="26R1.0.22" oninput="inputVersionOverride()">
 
           <label>Select Target Date & Time</label>
-          <span class="field-tooltip">💡 Automatically calculates matching CEST time strings to bind world clock anchors.</span>
+          <span class="field-tooltip">💡 Automatically calculates matching CEST/JST time strings to bind world clock anchors.</span>
           <input type="datetime-local" id="dateTime" oninput="formatFriendlyDate()">
 
-          <label>Friendly Date Output (Editable Override)</label>
+          <label>Friendly Date Output</label>
           <input type="text" id="friendlyDate" value="Wednesday, April 29 at 10:00 am PDT" oninput="updatePreview()">
           <input type="hidden" id="isoStringValue" value="20260429T10">
 
@@ -154,7 +157,7 @@
             <input type="text" id="estimatedDowntime" value="90 Minutes" oninput="updatePreview()">
           </div>
 
-          <label>Active PODs Multi-Select Criteria</label>
+          <label>Active PODs</label>
           <div class="filter-dashboard">
             <div class="master-row">
               <input type="checkbox" id="masterSelectAll" onchange="toggleMasterSelectAll(this)">
@@ -185,7 +188,7 @@
           <label style="margin-top: 10px;">Final Output View (Affected PODs Layout Box)</label>
           <textarea id="affectedPods" rows="6" oninput="updatePreview()" placeholder="Your configurations will auto-compile here..."></textarea>
 
-          <label>Email Bottom Notes (Editable Layout)</label>
+          <label style="margin-top: 10px;">Email Bottom Notes (Editable Layout)</label>
           <textarea id="emailNotes" rows="7" oninput="updatePreview()">Click [[LOCATION_TAG]] to learn how to find your Vault's POD location.
 
 Read the [[VERSION]] Release Notes for details.
@@ -200,6 +203,8 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
             <input type="checkbox" id="confirmUrl">
             <label for="confirmUrl">I confirm this URL is active</label>
           </div>
+
+          <button id="clearActionBtn" class="clear-btn" type="button" onclick="confirmClearForm()">Clear Form</button>
         </section>
 
         <section class="preview-pane">
@@ -463,7 +468,6 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
 
           const friendlyDate = friendlyDateRaw.replace(' at ', ', ');
           
-          // DYNAMIC LIVE PREVIEW TIMEZONE COMPILER RENDER (JST Updated)
           let activeTimeStrings = [];
           const dateTimeInput = document.getElementById('dateTime');
           
@@ -471,15 +475,12 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
             const datePDT = new Date(dateTimeInput.value);
             const currentPodsVal = getSafeValue('affectedPods', '').toUpperCase();
             
-            let hasUS = currentPodsVal.includes("US ");
             let hasEU = currentPodsVal.includes("EU ");
             let hasAPAC = currentPodsVal.includes("APAC ");
             
-            if (!hasUS && !hasEU && !hasAPAC) { hasUS = true; hasEU = true; hasAPAC = true; }
+            // Locked absolute baseline entry point anchor string
+            activeTimeStrings.push(friendlyDate);
             
-            if (hasUS) {
-              activeTimeStrings.push(friendlyDate);
-            }
             if (hasEU) {
               const dateCEST = new Date(datePDT.getTime() + (9 * 60 * 60 * 1000));
               const optionsCEST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
@@ -487,7 +488,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
               activeTimeStrings.push(formattedCEST);
             }
             if (hasAPAC) {
-              const dateJST = new Date(datePDT.getTime() + (16 * 60 * 60 * 1000)); // PDT + 16 Hours = JST
+              const dateJST = new Date(datePDT.getTime() + (16 * 60 * 60 * 1000)); 
               const optionsJST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
               let formattedJST = dateJST.toLocaleString('en-US', optionsJST).replace(',', '').replace(' at ', ', ') + " JST";
               activeTimeStrings.push(formattedJST);
@@ -573,6 +574,54 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
         } catch (e) {
           console.error(e);
         }
+      }
+
+      function confirmClearForm() {
+        const verified = confirm("Are you absolutely sure you want to clear this form? All custom entries and selected POD profiles will be permanently lost.");
+        if (verified) {
+          executeFormReset();
+        }
+      }
+
+      function executeFormReset() {
+        document.getElementById('releaseType').value = "Maintenance Only";
+        document.getElementById('envTheme').value = "PROD";
+        document.getElementById('statusCastType').value = "Maintenance";
+        
+        document.getElementById('subjectLine').value = "Veeva Vault Maintenance Release Notification";
+        document.getElementById('releaseVersion').value = "26R1.0.22";
+        document.getElementById('estimatedDowntime').value = "90 Minutes";
+        document.getElementById('releaseNotes').value = "https://vaulthelp.veeva.com";
+        
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        
+        document.getElementById('dateTime').value = `${year}-${month}-${day}T${hours}:${minutes}`;
+        
+        activeRegions = [];
+        activeReleases = [];
+        activeProducts = [];
+        
+        document.querySelectorAll('.macro-filter-btn').forEach(btn => btn.classList.remove('active'));
+        
+        const masterCheck = document.getElementById('masterSelectAll');
+        if (masterCheck) {
+          masterCheck.checked = false;
+          masterCheck.indeterminate = false;
+        }
+        document.querySelectorAll('.pod-box').forEach(cb => cb.checked = false);
+        
+        document.getElementById('affectedPods').value = "";
+        document.getElementById('confirmUrl').checked = false;
+        
+        document.getElementById('emailNotes').value = `Click [[LOCATION_TAG]] to learn how to find your Vault's POD location.\n\nRead the [[VERSION]] Release Notes for details.\n\nFor up-to-date information on Veeva Systems' service status, see the Veeva Trust Site.\nIf you have any further questions, please submit a ticket with Veeva Product Support.`;
+        
+        formatFriendlyDate();
+        updatePreview();
       }
 
       function submitData() {
