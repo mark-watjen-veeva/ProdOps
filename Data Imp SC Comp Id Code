@@ -1,7 +1,7 @@
 /**
  * AUTOMATIC MENU GENERATOR
  */
-function onOpen() {
+function updateSCID() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('Update SC ID')
     .addItem('Pull Data from StatusCast', 'populateStatusCastIds')
