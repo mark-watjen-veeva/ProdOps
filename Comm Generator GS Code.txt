@@ -56,7 +56,7 @@ function fetchPodDataFromSheet() {
       return { 
         status: 'success', 
         individualPods: ["VV3-3057", "VV3-3099"], 
-        podMetadata: {"VV3-3057": {region: "APAC", release: "General", product: "Vault", trustId: ""}},
+        podMetadata: {"VV3-3057": {region: "APAC", release: "General", product: "Vault", trustId: "", upgradeMode: "Classic"}},
         uniqueRegions: ["US", "EU", "APAC"],
         uniqueReleases: ["General"],
         uniqueProducts: ["Safety", "LIMS", "RegOne", "Vault"]
@@ -70,7 +70,8 @@ function fetchPodDataFromSheet() {
     const releaseColIndex = headers.indexOf("RELEASE");  
     const productColIndex = headers.indexOf("PRODUCT");
     const podGroupColIndex = headers.indexOf("VAULT POD GROUP"); 
-    const trustIdColIndex = headers.indexOf("TRUST ID"); // Maps Column K
+    const trustIdColIndex = headers.indexOf("TRUST ID"); 
+    const upgradeModeColIndex = headers.indexOf("UPGRADE MODE"); // Maps Column J
     
     let podValues = [];
     let podMetadata = {};
@@ -85,6 +86,7 @@ function fetchPodDataFromSheet() {
       let currentProduct = (productColIndex !== -1) ? String(rows[i][productColIndex]).trim() : "";
       let currentPodGroup = (podGroupColIndex !== -1) ? String(rows[i][podGroupColIndex]).trim() : "";
       let currentTrustId = (trustIdColIndex !== -1) ? String(rows[i][trustIdColIndex]).trim() : "";
+      let currentUpgradeMode = (upgradeModeColIndex !== -1) ? String(rows[i][upgradeModeColIndex]).trim() : "";
 
       if (currentPod === "" || /^\d+$/.test(currentPod) || currentPodGroup === "") {
         continue;
@@ -95,6 +97,7 @@ function fetchPodDataFromSheet() {
       if (!currentRegion) currentRegion = "Unknown";
       if (!currentRelease) currentRelease = "Unknown";
       if (!currentProduct) currentProduct = "Unknown";
+      if (!currentUpgradeMode) currentUpgradeMode = "Unknown";
 
       if (currentRegion !== "NA") regionsSet.add(currentRegion);
       releasesSet.add(currentRelease);
@@ -107,7 +110,8 @@ function fetchPodDataFromSheet() {
         region: currentRegion,
         release: currentRelease,
         product: currentProduct,
-        trustId: currentTrustId
+        trustId: currentTrustId,
+        upgradeMode: currentUpgradeMode
       };
     }
     
@@ -184,30 +188,28 @@ function buildUnifiedHtmlBody(formData, isStatusCast) {
   let dynamicDowntimeRowMarkup = "";
   if (cleanReleaseType === "Downtime Required") {
     description = "Veeva Platform will be upgraded to the latest maintenance release and the system will be <strong>unavailable for use during this time.</strong>";
-    dynamicDowntimeRowMarkup = `<tr><td style="padding: 4px 0;"><strong>Estimated Vault Downtime:</strong> ${finalDowntimeString}</td></tr>`;
+    dynamicDowntimeRowMarkup = `<tr><td style="padding: 4px 0;"><strong>Estimated Vault Downtime:</strong> ` + finalDowntimeString + `</td></tr>`;
   }
 
   let regionHeaderPrefix = "PODs";
   let formattedPodsListString = "";
 
   if (formData.affectedPods) {
-    let lines = formData.affectedPods.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length > 0) {
-      let selectedRegionsSet = new Set();
-      lines.forEach(line => {
-        let plainText = line.replace(/<\/?[^>]+(>|$)/g, ""); 
-        if (plainText.toUpperCase().startsWith("US ")) selectedRegionsSet.add("US");
-        if (plainText.toUpperCase().startsWith("EU ")) selectedRegionsSet.add("EU");
-        if (plainText.toUpperCase().startsWith("APAC ")) selectedRegionsSet.add("APAC");
-      });
+    let upperPodsText = formData.affectedPods.replace(/<\/?[^>]+(>|$)/g, "").toUpperCase();
+    let selectedRegionsSet = new Set();
+    
+    if (upperPodsText.includes("US ")) selectedRegionsSet.add("US");
+    if (upperPodsText.includes("EU ")) selectedRegionsSet.add("EU");
+    if (upperPodsText.includes("APAC ")) selectedRegionsSet.add("APAC");
 
-      const strictRegionOrder = ["US", "EU", "APAC"];
-      let orderedRegions = strictRegionOrder.filter(r => selectedRegionsSet.has(r));
-      if (orderedRegions.length > 0) {
-        regionHeaderPrefix = orderedRegions.join('/') + " PODs";
-      }
-      formattedPodsListString = lines.join('<br/>');
+    const strictRegionOrder = ["US", "EU", "APAC"];
+    let orderedRegions = strictRegionOrder.filter(r => selectedRegionsSet.has(r));
+    if (orderedRegions.length > 0) {
+      regionHeaderPrefix = orderedRegions.join('/') + " PODs";
     }
+
+    let lines = formData.affectedPods.split(/[\n\r]+/).map(l => l.trim()).filter(Boolean);
+    formattedPodsListString = lines.join('<br/>');
   }
 
   let shortVersion = rawVersion.substring(0, 4);
@@ -277,10 +279,10 @@ function buildUnifiedHtmlBody(formData, isStatusCast) {
         <h2 style="text-align: center; color: #000000; font-size: 22px; font-weight: bold; margin-top: 0; margin-bottom: 20px; font-family: Arial, sans-serif;">${cleanSubject}</h2>
         <p style="line-height: 1.5; font-size: 14px; color: #333333; margin-bottom: 25px;">${description}</p>
         <table style="width: 100%; border-collapse: collapse; font-size: 14px; font-family: Arial, sans-serif;">
-          <tr><td style="padding: 4px 0;"><strong>What:</strong> Veeva Vault ${shortVersion}</td></tr>
+          <tr><td style="padding: 4px 0;"><strong>What:</strong> Veeva Vault ${rawVersion}</td></tr>
           <tr><td style="padding: 4px 0;"><strong>When:</strong> <a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline;">${finalWhenString}</a></td></tr>
           ${dynamicDowntimeRowMarkup}
-          <tr><td style="padding: 4px 0;"><strong>Affected PODs:</strong> <span style="text-decoration: underline;">${regionHeaderPrefix}</span></td></tr>
+          <tr><td style="padding: 4px 0;"><strong>Affected PODs:</strong> <span>${regionHeaderPrefix}</span></td></tr>
         </table>
         <div style="margin-top: 12px; font-weight: normal; font-size: 14px; line-height: 1.6; color: #333333; font-family: Arial, sans-serif; white-space: normal;">
           ${formattedPodsListString}
@@ -371,7 +373,6 @@ function processTrustPushRequest(formData) {
       throw new Error("Failed to authenticate or download active components map from StatusCast API.");
     }
 
-    // Map active component IDs into a lightning-fast validation Set
     var activeComponentsData = JSON.parse(componentsResponse.getContentText());
     var validStatusCastIds = new Set();
     
@@ -381,7 +382,7 @@ function processTrustPushRequest(formData) {
       });
     }
 
-    // --- STEP 2: COMPILE INCIDENT STRUCUTRES ---
+    // --- STEP 2: COMPILE INCIDENT STRUCTURES ---
     var incidentUrl = "https://" + String(fullDomain).trim() + "/api/v4/incident";
     var now = new Date();
     var currentIsoDate = now.toISOString();
@@ -430,7 +431,6 @@ function processTrustPushRequest(formData) {
                   realComponentIds.push(numericId);
                 }
               } else {
-                // Tracking dropped items automatically instead of hardcoding exclusions
                 droppedComponentLog.push("'" + podKey + "' (ID: " + numericId + ")");
               }
             }
@@ -439,13 +439,11 @@ function processTrustPushRequest(formData) {
       });
     }
 
-    // If an invalid code completely stripped the selection array, inform the operator immediately
     if (realComponentIds.length === 0) {
       var errorLogString = droppedComponentLog.length > 0 ? "\nRejected elements discovered: " + droppedComponentLog.join(', ') : "";
       throw new Error("Aborted submission: No active, matching component IDs found on your StatusCast platform instance for these selections." + errorLogString);
     }
 
-    // Log ignored discrepancies in console background silently without disrupting the application thread
     if (droppedComponentLog.length > 0) {
       console.warn("Auto-filtered out inactive StatusCast IDs from payload transmission: " + JSON.stringify(droppedComponentLog));
     }
