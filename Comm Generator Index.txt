@@ -118,7 +118,7 @@
       <div class="main-content">
         <section class="form-pane">
           <label>Release Type Context</label>
-          <select id="releaseType" onchange="updatePreview()">
+          <select id="releaseType" onchange="evaluateReleaseTypeContext()">
             <option value="Maintenance Only">Maintenance Only (No Downtime)</option>
             <option value="Downtime Required">Downtime Required</option>
           </select>
@@ -178,6 +178,14 @@
               <span>Filter By Product (Select Multiple):</span>
               <div id="productButtonCluster" class="button-cluster"></div>
             </div>
+
+            <div id="upgradeModeFilterSection" class="filter-section" style="display: none;">
+              <span>Filter By Upgrade Mode (Select Multiple):</span>
+              <div id="upgradeModeButtonCluster" class="button-cluster">
+                <button type="button" id="btn-UPGRADEMODE-Classic" class="macro-filter-btn" onclick="executeMacroSelection('UPGRADEMODE', 'Classic')">+ Classic</button>
+                <button type="button" id="btn-UPGRADEMODE-VBV" class="macro-filter-btn" onclick="executeMacroSelection('UPGRADEMODE', 'VBV')">+ VBV</button>
+              </div>
+            </div>
           </div>
 
           <label>Choose Individual PODs Checkbox Layout:</label>
@@ -223,6 +231,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
       let activeRegions = [];
       let activeReleases = [];
       let activeProducts = [];
+      let activeUpgradeModes = [];
       let cachedFooterHtml = 'You are receiving this email as you are subscribed to receive product announcement emails on your Vault user profile.';
 
       window.addEventListener('DOMContentLoaded', function() {
@@ -253,6 +262,25 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
 
       function naturalSort(a, b) {
         return String(a).localeCompare(String(b), undefined, {numeric: true, sensitivity: 'base'});
+      }
+
+      function evaluateReleaseTypeContext() {
+        const typeSelect = document.getElementById('releaseType');
+        const upgradeSection = document.getElementById('upgradeModeFilterSection');
+        
+        if (typeSelect && typeSelect.value === "Downtime Required") {
+          if (upgradeSection) upgradeSection.style.display = "flex";
+        } else {
+          if (upgradeSection) upgradeSection.style.display = "none";
+          activeUpgradeModes = [];
+          document.querySelectorAll('#upgradeModeButtonCluster .macro-filter-btn').forEach(btn => btn.classList.remove('active'));
+          
+          let boxes = document.querySelectorAll('.pod-box');
+          boxes.forEach(cb => cb.checked = false);
+          updateMasterCheckboxState();
+          calculateMatrixSelections();
+        }
+        updatePreview();
       }
 
       function formatFriendlyDate() {
@@ -306,11 +334,11 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
         if (!container) return;
         container.classList.remove('loading-placeholder');
         container.innerHTML = globalIndividualPods.map(p => {
-          let meta = podMetadataMap[p] || { region: 'Unknown', release: 'Unknown', product: 'Unknown' };
+          let meta = podMetadataMap[p] || { region: 'Unknown', release: 'Unknown', product: 'Unknown', upgradeMode: 'Unknown' };
           let inputId = `chk-${p}`;
           return `
             <div class="pod-row-item">
-              <input type="checkbox" id="${inputId}" class="pod-box" value="${p}" data-region="${meta.region}" data-release="${meta.release}" data-product="${meta.product}" onchange="calculateMatrixSelections()">
+              <input type="checkbox" id="${inputId}" class="pod-box" value="${p}" data-region="${meta.region}" data-release="${meta.release}" data-product="${meta.product}" data-upgrade-mode="${meta.upgradeMode}" onchange="calculateMatrixSelections()">
               <label for="${inputId}">${p}</label>
             </div>
           `;
@@ -352,10 +380,19 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
             activeProducts.push(attributeValue);
             document.getElementById(`btn-PRODUCT-${attributeValue}`).classList.add('active');
           }
+        } else if (filterType === 'UPGRADEMODE') {
+          let index = activeUpgradeModes.indexOf(attributeValue);
+          if (index !== -1) {
+            activeUpgradeModes.splice(index, 1);
+            document.getElementById(`btn-UPGRADEMODE-${attributeValue}`).classList.remove('active');
+          } else {
+            activeUpgradeModes.push(attributeValue);
+            document.getElementById(`btn-UPGRADEMODE-${attributeValue}`).classList.add('active');
+          }
         }
         
         let boxes = document.querySelectorAll('.pod-box');
-        if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0) {
+        if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
           boxes.forEach(cb => cb.checked = false);
           updateMasterCheckboxState();
           calculateMatrixSelections();
@@ -366,12 +403,14 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
           let boxRegion = cb.getAttribute('data-region');
           let boxRelease = cb.getAttribute('data-release');
           let boxProduct = cb.getAttribute('data-product');
+          let boxUpgradeMode = cb.getAttribute('data-upgrade-mode');
           
           let matchRegion = activeRegions.length === 0 || activeRegions.includes(boxRegion);
           let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
           let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
+          let matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.includes(boxUpgradeMode);
           
-          cb.checked = matchRegion && matchRelease && matchProduct;
+          cb.checked = matchRegion && matchRelease && matchProduct && matchUpgradeMode;
         });
         updateMasterCheckboxState();
         calculateMatrixSelections(); 
@@ -568,7 +607,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
                 <tr><td><strong>What:</strong> Veeva Vault ${version}</td></tr>
                 <tr><td><strong>When:</strong> <a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline; ">${displayWhenMarkupString}</a></td></tr>
                 ${dynamicDowntimeRowMarkup}
-                <tr><td><strong>Affected PODs:</strong> ${regionHeaderPrefix}</td></tr>
+                <tr><td><strong>Affected PODs:</strong> <span>${regionHeaderPrefix}</span></td></tr>
               </table>
               <div style="margin-top: 12px; font-weight: normal; font-size: 14px; line-height: 1.6; color: #333333; font-family: Arial, sans-serif; white-space: normal;">
                 ${htmlOutputLinesBlock ? htmlOutputLinesBlock + '<br/><br/>' : ''}
@@ -616,6 +655,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
         activeRegions = [];
         activeReleases = [];
         activeProducts = [];
+        activeUpgradeModes = [];
         
         document.querySelectorAll('.macro-filter-btn').forEach(btn => btn.classList.remove('active'));
         
@@ -631,6 +671,7 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
         
         document.getElementById('emailNotes').value = `Click [[LOCATION_TAG]] to learn how to find your Vault's POD location.\n\nRead the [[VERSION]] Release Notes for details.\n\nFor up-to-date information on Veeva Systems' service status, see the Veeva Trust Site.\nIf you have any further questions, please submit a ticket with Veeva Product Support.`;
         
+        evaluateReleaseTypeContext();
         formatFriendlyDate();
         updatePreview();
       }
@@ -639,7 +680,6 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
         const confirmEl = document.getElementById('confirmUrl');
         if (confirmEl && !confirmEl.checked) { alert("Confirm active URL parameter."); return; }
         
-        // FIXED: Converts raw text newlines to functional <br/> HTML tags so platforms render the vertical spacing gaps perfectly
         const formDataPayload = {
           envTheme: getSafeValue('envTheme', 'PROD'), 
           releaseType: getSafeValue('releaseType', 'Maintenance Only'),
@@ -682,7 +722,6 @@ If you have any further questions, please submit a ticket with Veeva Product Sup
            }
         }
 
-        // FIXED: Converts raw text newlines to functional <br/> HTML tags so platforms render the vertical spacing gaps perfectly
         const formDataPayload = {
           envTheme: getSafeValue('envTheme', 'PROD'), 
           releaseType: getSafeValue('releaseType', 'Maintenance Only'),
