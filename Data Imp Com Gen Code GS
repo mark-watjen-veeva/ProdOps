@@ -1,12 +1,12 @@
 /**
  * MASTER ONOPEN TRIGGER
- * Automatically fires when the spreadsheet opens. 
+ * Automatically fires when the spreadsheet opens.
  * Combines both automation menus into a single startup sequence.
  */
 function onOpen() {
   // 1. Run the function from your SSCompID.gs file (e.g., to update SC IDs)
   if (typeof updateSCID === "function") { 
-    updateSCID(); 
+    updateSCID();
   }
   
   // 2. Build your custom 🚀 Automation menu layout
@@ -20,11 +20,11 @@ function createMyMenu() {
   const ui = SpreadsheetApp.getUi();
   
   ui.createMenu('🚀 Automation')
-    .addItem('Sync to Reference Replica (Local)', 'mapFieldsByHeader')   // Button 1
+    .addItem('Sync to POD Profiles (Local)', 'mapFieldsByHeader')   // Button 1
     .addItem('Run Monthly API Sync (Automated)', 'automatedMonthlyUpdate') // Button 2
     .addSeparator()
-    .addItem('Clear Reference Replica', 'clearReferenceSheet')
-    .addToUi(); // This pushes everything onto your screen at once
+    .addItem('Clear POD Profiles Sheet', 'clearReferenceSheet')
+    .addToUi();
 }
 
 /**
@@ -33,22 +33,20 @@ function createMyMenu() {
  */
 function automatedMonthlyUpdate() { 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName("VMC Export"); 
+  const sheet = ss.getSheetByName("VMC Export");
   const userEmail = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
-  
   if (!sheet) {
     Logger.log("⚠️ Error: 'VMC Export' sheet was not found.");
     return;
   }
   
-  // 1. Fetch data from your StatusCast API for monthly Refresh of data. 
+  // 1. Fetch data from your StatusCast API for monthly Refresh of data.
   const scriptProps = PropertiesService.getScriptProperties();
   const apiKey = scriptProps.getProperty('StatusCastComponentIDAPIKey');
   const pageId = scriptProps.getProperty('StatusCastPageID');
-  
   if (!apiKey || !pageId) {
     Logger.log("⚠️ Error: 'StatusCastComponentIDAPIKey' or 'StatusCastPageID' was not found in your Script Properties.");
-    return; 
+    return;
   }
 
   const apiUrl = `https://${pageId}.statuscast.com/api/v4/components`;
@@ -63,16 +61,14 @@ function automatedMonthlyUpdate() {
       },
       "muteHttpExceptions": true
     };
-
     const response = UrlFetchApp.fetch(apiUrl, options);
     
     if (response.getResponseCode() !== 200) {
       throw new Error("HTTP Status " + response.getResponseCode() + ": " + response.getContentText());
     }
     
-    apiData = JSON.parse(response.getContentText()); 
+    apiData = JSON.parse(response.getContentText());
     Logger.log("Successfully fetched API data using secure environment parameters.");
-    
   } catch (e) {
     Logger.log("API Fetch Failed: " + e.toString());
     MailApp.sendEmail(userEmail, "Monthly App Sync: FAILED", `The automated sync failed.\nError: ${e.toString()}`);
@@ -81,16 +77,15 @@ function automatedMonthlyUpdate() {
 
   // 2. Get existing data from your Sheet
   const sheetData = sheet.getDataRange().getValues();
-  
   // Create a list/map of existing IDs to easily check for changes (ID in the first column)
-  const existingIds = sheetData.length > 1 ? sheetData.slice(1).map(row => row[0].toString().trim()) : []; 
+  const existingIds = sheetData.length > 1 ?
+    sheetData.slice(1).map(row => row[0].toString().trim()) : [];
   
   let changeLog = [];
   let newRowsCount = 0;
-
   // 3. Compare API data against Sheet data
   apiData.forEach(newItem => {
-    const itemId = newItem.id.toString().trim(); 
+    const itemId = newItem.id.toString().trim();
     
     if (!existingIds.includes(itemId)) {
       newRowsCount++;
@@ -100,7 +95,6 @@ function automatedMonthlyUpdate() {
       sheet.appendRow([newItem.id, newItem.name, newItem.status, new Date()]);
     }
   });
-
   // 4. Send Confirmation Email if changes occurred
   if (changeLog.length > 0) {
     const emailSubject = "Communication Generator: Updates Detected";
@@ -110,7 +104,6 @@ function automatedMonthlyUpdate() {
     
     MailApp.sendEmail(userEmail, emailSubject, emailBody);
     Logger.log("Changes found. Email sent.");
-    
     // Auto-trigger mapping engine since new rows were introduced
     mapFieldsByHeader();
   } else {
@@ -120,19 +113,19 @@ function automatedMonthlyUpdate() {
 }
 
 /**
- * Main function to map data from 'VMC Export' to 'Reference Replica'.
+ * Main function to map data from 'VMC Export' to 'POD Profiles'.
  */
 function mapFieldsByHeader() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sourceSheet = ss.getSheetByName("VMC Export");
-  const targetSheet = ss.getSheetByName("Reference Replica");
+  const targetSheet = ss.getSheetByName("POD Profiles");
   const statusCastSheet = ss.getSheetByName("StatusCastIds");
 
   if (!sourceSheet || !targetSheet) {
     if (SpreadsheetApp.getUi()) {
-      SpreadsheetApp.getUi().alert("Error: Tabs 'VMC Export' or 'Reference Replica' not found.");
+      SpreadsheetApp.getUi().alert("Error: Tabs 'VMC Export' or 'POD Profiles' not found.");
     } else {
-      Logger.log("Error: Tabs 'VMC Export' or 'Reference Replica' not found.");
+      Logger.log("Error: Tabs 'VMC Export' or 'POD Profiles' not found.");
     }
     return;
   }
@@ -142,7 +135,7 @@ function mapFieldsByHeader() {
   if (statusCastSheet) {
     const scValues = statusCastSheet.getDataRange().getValues();
     for (let i = 1; i < scValues.length; i++) {
-      const colA = (scValues[i][0] || "").toString().trim(); 
+      const colA = (scValues[i][0] || "").toString().trim();
       const colB = (scValues[i][1] || "").toString().trim(); 
       if (colA) {
         statusCastMap[colA] = colB;
@@ -152,7 +145,6 @@ function mapFieldsByHeader() {
 
   const sourceValues = sourceSheet.getDataRange().getValues();
   if (sourceValues.length < 2) return;
-
   const sourceHeaders = sourceValues[0].map(h => h.toString().trim().toLowerCase());
   const sourceRows = sourceValues.slice(1);
   const targetHeadersRaw = targetSheet.getRange(1, 1, 1, targetSheet.getLastColumn()).getValues()[0];
@@ -169,14 +161,12 @@ function mapFieldsByHeader() {
   const pgSrcIdx = sourceHeaders.indexOf("vault pod group");
   const vtSrcIdx = sourceHeaders.indexOf("vault types");
   const descSrcIdx = sourceHeaders.indexOf("description");
-
   // Fields to map directly
   const fieldsToMap = ["vault pod group", "release", "pod", "vault types", "location"];
   const colMap = fieldsToMap.map(f => ({
     src: sourceHeaders.indexOf(f),
     trg: targetHeadersClean.indexOf(f)
   }));
-
   const backgroundColors = [];
 
   const outputData = sourceRows.map((row, rowIndex) => {
@@ -209,7 +199,7 @@ function mapFieldsByHeader() {
       if (pgVal !== "") {
         const parts = pgVal.split('-');
         if (parts.length >= 3 && parts[2]) {
-          const id = parts[2].charAt(0).toUpperCase(); 
+          const id = parts[2].charAt(0).toUpperCase();
           const tMap = { 'A': '5:00 PM', 'B': '4:00 PM', 'C': '10:00 AM' };
           newRow[deployIdx] = tMap[id] || "Other";
         } else {
@@ -224,7 +214,7 @@ function mapFieldsByHeader() {
     if (earlyPodIdx !== -1 && pgVal !== "") {
       const parts = pgVal.split('-');
       if (parts.length >= 3) {
-        const rawCode = parts[2].split('_')[0].trim().toUpperCase(); 
+        const rawCode = parts[2].split('_')[0].trim().toUpperCase();
         const earlyMap = { 'E': 'Early', 'E1': 'R1', 'E2': 'R2', 'E3': 'R3' };
         newRow[earlyPodIdx] = earlyMap[rawCode] || "";
       }
@@ -241,24 +231,27 @@ function mapFieldsByHeader() {
     }
 
     // 6. Upgrade Mode Mapping
-    const vType = (row[vtSrcIdx] || "").toString().trim().toLowerCase();
     if (upgradeIdx !== -1) {
-      if (vType === "production") newRow[upgradeIdx] = "VBV";
-      else if (vType === "sandbox") newRow[upgradeIdx] = "Classic";
+      const podGroupStr = (newRow[1] || "").toString().trim().toLowerCase();
+      if (podGroupStr.endsWith('v')) {
+        newRow[upgradeIdx] = "VBV";
+      } else if (podGroupStr.endsWith('c')) {
+        newRow[upgradeIdx] = "Classic";
+      }
     }
 
     // 7. StatusCastIds Look-up Mapping
-    const colCValue = (newRow[2] || "").toString().trim(); 
+    const colCValue = (newRow[2] || "").toString().trim();
     if (colCValue && statusCastMap[colCValue]) {
       newRow[10] = statusCastMap[colCValue];
     }
 
-    // Always keep background color clean white (Red highlight tracking removed)
+    // Always keep background color clean white
     backgroundColors.push(new Array(newRow.length).fill("#ffffff"));
     return newRow;
   });
 
-  clearReferenceSheet(false); 
+  clearReferenceSheet(false);
 
   if (outputData.length > 0) {
     const finalColCount = outputData[0].length;
@@ -267,7 +260,6 @@ function mapFieldsByHeader() {
     range.setBackgrounds(backgroundColors);
     
     refreshPivotTables();
-
     try {
       ss.toast("Sync complete and Pivot Tables refreshed!", "🚀 Success", 3);
     } catch(e) {
@@ -281,29 +273,28 @@ function mapFieldsByHeader() {
  */
 function clearReferenceSheet(showAlert = true) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const targetSheet = ss.getSheetByName("Reference Replica");
+  const targetSheet = ss.getSheetByName("POD Profiles");
   if (!targetSheet) return;
-
   const lastRow = targetSheet.getLastRow();
   const lastCol = targetSheet.getLastColumn();
 
   if (lastRow > 1) {
     targetSheet.getRange(2, 1, lastRow - 1, Math.max(lastCol, 11))
                .clearContent()
-               .setBackground("#ffffff"); 
+               .setBackground("#ffffff");
   }
 
   if (showAlert) {
-    ss.toast("Reference Replica cleared.", "Done");
+    ss.toast("POD Profiles sheet cleared.", "Done");
   }
 }
 
 /**
- * Updates all pivot tables referencing the 'Reference Replica' sheet.
+ * Updates all pivot tables referencing the 'POD Profiles' sheet.
  */
 function refreshPivotTables() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sourceSheet = ss.getSheetByName("Reference Replica");
+  const sourceSheet = ss.getSheetByName("POD Profiles");
   if (!sourceSheet) return;
 
   const lastRow = sourceSheet.getLastRow();
@@ -312,7 +303,6 @@ function refreshPivotTables() {
   
   const sourceRange = sourceSheet.getRange(1, 1, lastRow, lastCol);
   const allSheets = ss.getSheets();
-
   allSheets.forEach(sheet => {
     const pivots = sheet.getPivotTables();
     pivots.forEach(pivot => {
