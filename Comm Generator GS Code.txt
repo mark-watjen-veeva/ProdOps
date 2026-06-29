@@ -1,561 +1,410 @@
 /**
- * PLATFORM SENDGRID & TRUST DRAFT EMAIL COMMUNICATION GENERATOR
+ * Global Configuration for Sheet Names & Environment Variables
  */
+const CONFIG = {
+  TEMPLATES_SHEET: "Email Templates",
+  PODS_SHEET: "POD Profiles",
+  DEFAULT_SPREADSHEET_ID: PropertiesService.getScriptProperties().getProperty('CommGenGSheetID')
+};
 
+/**
+ * Serves the core HTML modal wrapper layout to the spreadsheet UI viewport.
+ */
 function doGet() {
   return HtmlService.createTemplateFromFile('Index')
-      .evaluate()
-      .setTitle('Platform SendGrid & Trust Comm Generator')
-      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .evaluate()
+    .setTitle('Veeva Comm Generator')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
+/**
+ * Convenience menu trigger execution hook.
+ */
 function onOpen() {
-  try {
-    SpreadsheetApp.getUi().createMenu('🚀 Comm Tools')
-        .addItem('Open Comm Generator', 'forceLaunchPanel')
-        .addToUi();
-  } catch (e) {}
+  SpreadsheetApp.getUi()
+    .createMenu('📩 Comm Generator')
+    .addItem('Launch Dashboard Modal', 'launchGeneratorDashboardModal')
+    .addToUi();
 }
 
-function forceLaunchPanel() {
-  const html = HtmlService.createTemplateFromFile('Index')
-      .evaluate()
-      .setWidth(1000)
-      .setHeight(850);
-  SpreadsheetApp.getUi().showModalDialog(html, 'SendGrid Generator Dashboard');
-}
-
-/**
- * MASTER FOOTER TEXT REGISTRY (Single Source of Truth)
- */
-function getUnifiedFooterText() {
-  return 'You are receiving this email as you are subscribed to receive system availability emails on your Vault user profile, or are a part of a distribution list within your organization. To <a href="https://platform.veevavault.help/en/lr/7239/#notification-email" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline;">unsubscribe</a> from future notifications, please contact your system administrator.';
+function launchGeneratorDashboardModal() {
+  const uiMarkup = HtmlService.createTemplateFromFile('Index')
+    .evaluate()
+    .setWidth(1250)
+    .setHeight(850);
+  SpreadsheetApp.getUi().showModalDialog(uiMarkup, ' ');
 }
 
 /**
- * DATABASE CONNECTOR: Dynamically binds to the workbook safely across all execution contexts
- */
-function getSpreadsheetTemplatesConfig() {
-  try {
-    let ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) {
-      ss = SpreadsheetApp.openById("1nkHEdI7M96BlHnA91_Xpy_ReLbmc_Yp6gjaORGIELsA");
-    }
-    
-    const sheet = ss.getSheetByName("Email Templates");
-    if (!sheet) throw new Error("Could not find the 'Email Templates' tab inside this workbook.");
-    
-    const rows = sheet.getDataRange().getValues();
-    const headers = rows[0].map(h => String(h).trim());
-    
-    const keyIdx = headers.indexOf("Template_Key");
-    const labelIdx = headers.indexOf("Dropdown_Label");
-    const subjectIdx = headers.indexOf("Default_Subject");
-    const titleIdx = headers.indexOf("Default_Title");
-    const rawNotesIdx = headers.indexOf("Dashboard_Notes_Raw");
-    const htmlBodyIdx = headers.indexOf("Email_Body_HTML");
-    const downtimeFlagIdx = headers.indexOf("Requires_Downtime"); 
-    
-    let templatesArray = [];
-    for (let i = 1; i < rows.length; i++) {
-      let key = String(rows[i][keyIdx]).trim();
-      if (!key) continue;
-      
-      templatesArray.push({
-        key: key,
-        label: String(rows[i][labelIdx]).trim(),
-        subject: String(rows[i][subjectIdx]).trim(),
-        title: String(rows[i][titleIdx]).trim(),
-        rawNotes: String(rows[i][rawNotesIdx]).trim().replace(/\\n/g, '\n'),
-        htmlBody: String(rows[i][htmlBodyIdx]).trim(),
-        requiresDowntime: downtimeFlagIdx !== -1 ? (String(rows[i][downtimeFlagIdx]).trim().toUpperCase() === "TRUE") : false
-      });
-    }
-    return { status: 'success', templates: templatesArray };
-  } catch (err) {
-    return { status: 'error', message: err.toString() };
-  }
-}
-
-/**
- * DYNAMIC POD DATA INGESTION ENGINE
+ * Compiles unique checklist tracking dimensions and individual profiles from the database sheet.
  */
 function fetchPodDataFromSheet() {
   try {
-    let rows;
-    try {
-      let ss = SpreadsheetApp.getActiveSpreadsheet();
-      if (!ss) {
-        ss = SpreadsheetApp.openById("1nkHEdI7M96BlHnA91_Xpy_ReLbmc_Yp6gjaORGIELsA");
-      }
-      
-      let sheet = ss.getSheets()[0];
-      const targetSheets = ss.getSheets().filter(s => s.getSheetId() == 1274836295);
-      if (targetSheets.length > 0) sheet = targetSheets[0];
-      
-      const lastRow = sheet.getLastRow();
-      const lastCol = sheet.getLastColumn();
-      rows = sheet.getRange(1, 1, lastRow, lastCol).getValues();
-    } catch (sheetErr) {
-      console.error("Sheet baseline disconnect handled: " + sheetErr.toString());
-      return { 
-        status: 'success', 
-        individualPods: ["VV3-3057", "VV3-3099"], 
-        podMetadata: {"VV3-3057": {region: "APAC", release: "General", product: "Vault", trustId: "", upgradeMode: "Classic"}},
-        uniqueRegions: ["US", "EU", "APAC"],
-        uniqueReleases: ["General"],
-        uniqueProducts: ["Safety", "LIMS", "RegOne", "Vault"]
-      };
+    let ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) {
+      ss = SpreadsheetApp.openById(CONFIG.DEFAULT_SPREADSHEET_ID);
+    }
+    
+    const sheet = ss.getSheetByName(CONFIG.PODS_SHEET);
+    if (!sheet) {
+      return { status: 'error', message: `Sheet labeled "${CONFIG.PODS_SHEET}" was not found.` };
     }
 
-    const headers = rows[0].map(h => String(h).trim().toUpperCase());
-    
-    const podColIndex = headers.indexOf("POD");          
-    const regionColIndex = headers.indexOf("REGION");    
-    const releaseColIndex = headers.indexOf("RELEASE");  
-    const productColIndex = headers.indexOf("PRODUCT");
-    const podGroupColIndex = headers.indexOf("VAULT POD GROUP"); 
-    const trustIdColIndex = headers.indexOf("TRUST ID"); 
-    const upgradeModeColIndex = headers.indexOf("UPGRADE MODE");
-    
-    let podValues = [];
+    const data = sheet.getDataRange().getDisplayValues();
+    if (data.length <= 1) {
+      return { status: 'success', individualPods: [], uniqueRegions: [], uniqueReleases: [], uniqueProducts: [] };
+    }
+
+    // Immutable hardcoded column indexes matching your spreadsheet layout explicitly
+    const idxRelease = 0; // Column A ("Release")
+    const idxPod = 2;     // Column C ("POD")
+    const idxProduct = 3; // Column D ("Product")
+    const idxRegion = 8;  // Column I ("Region")
+    const idxUpgrade = 9; // Column J ("Upgrade Mode")
+
+    let individualPods = [];
     let podMetadata = {};
     let regionsSet = new Set();
     let releasesSet = new Set();
     let productsSet = new Set();
 
-    for (let i = 1; i < rows.length; i++) {
-      let currentPod = (podColIndex !== -1) ? String(rows[i][podColIndex]).trim() : "";
-      let currentRegion = (regionColIndex !== -1) ? String(rows[i][regionColIndex]).trim() : "";
-      let currentRelease = (releaseColIndex !== -1) ? String(rows[i][releaseColIndex]).trim() : "";
-      let currentProduct = (productColIndex !== -1) ? String(rows[i][productColIndex]).trim() : "";
-      let currentCategory = (podGroupColIndex !== -1) ? String(rows[i][podGroupColIndex]).trim() : "";
-      let currentTrustId = (trustIdColIndex !== -1) ? String(rows[i][trustIdColIndex]).trim() : "";
-      let currentUpgradeMode = (upgradeModeColIndex !== -1) ? String(rows[i][upgradeModeColIndex]).trim() : "";
+    for (let i = 1; i < data.length; i++) {
+      let row = data[i];
+      
+      let podName = String(row[idxPod]).trim();
+      if (!podName) continue; 
 
-      if (currentPod === "" || /^\d+$/.test(currentPod) || currentCategory === "") {
+      let relVal = String(row[idxRelease]).trim();
+      let prodVal = String(row[idxProduct]).trim();
+      let regVal = String(row[idxRegion]).trim();
+      let upgVal = String(row[idxUpgrade]).trim();
+
+      if (relVal.includes("/") || relVal.includes("-") || !isNaN(relVal.charAt(0))) {
         continue;
       }
 
-      podValues.push(currentPod);
+      individualPods.push(podName);
       
-      if (!currentRegion) currentRegion = "Unknown";
-      if (!currentRelease) currentRelease = "Unknown";
-      if (!currentProduct) currentProduct = "Unknown";
-      if (!currentUpgradeMode) currentUpgradeMode = "Unknown";
-
-      if (currentRegion !== "NA") regionsSet.add(currentRegion);
-      releasesSet.add(currentRelease);
-      
-      if (currentProduct !== "Unknown" && currentProduct !== "Vault Basics" && currentProduct !== "") {
-        productsSet.add(currentProduct);
-      }
-
-      podMetadata[currentPod] = {
-        region: currentRegion,
-        release: currentRelease,
-        product: currentProduct,
-        trustId: currentTrustId,
-        upgradeMode: currentUpgradeMode
+      podMetadata[podName] = {
+        region: regVal || "Unknown",
+        release: relVal || "General",
+        product: prodVal || "Vault",
+        upgradeMode: upgVal || "Classic"
       };
+
+      if (regVal && regVal.trim() !== "") regionsSet.add(regVal.trim());
+      if (relVal && relVal.trim() !== "") releasesSet.add(relVal.trim());
+      if (prodVal && prodVal.trim() !== "") productsSet.add(prodVal.trim());
     }
-    
-    let finalUniqueProducts = [...productsSet].sort();
-    if (finalUniqueProducts.length === 0) {
-      finalUniqueProducts = ["Safety", "LIMS", "RegOne", "Vault"];
-    }
-    
+
+    individualPods.sort((a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'}));
+
     return {
       status: 'success',
-      individualPods: [...new Set(podValues)].sort((a,b) => String(a).localeCompare(String(b), undefined, {numeric: true})),
+      individualPods: individualPods,
       podMetadata: podMetadata,
-      uniqueRegions: [...regionsSet].sort(),
-      uniqueReleases: [...releasesSet].sort(),
-      uniqueProducts: finalUniqueProducts,
-      footerHtml: getUnifiedFooterText()
+      uniqueRegions: Array.from(regionsSet).sort(),
+      uniqueReleases: Array.from(releasesSet).sort(),
+      uniqueProducts: Array.from(productsSet).sort()
     };
+
   } catch (err) {
     return { status: 'error', message: err.toString() };
   }
 }
 
-function getSenderIdByEmail(apiKey, targetEmail) {
-  const options = {
-    "method": "get",
-    "headers": { "Authorization": "Bearer " + apiKey },
-    "muteHttpExceptions": true
-  };
-  
-  const response = UrlFetchApp.fetch("https://api.sendgrid.com/v3/verified_senders", options);
-  if (response.getResponseCode() !== 200) {
-    throw new Error("Unable to read Sender Identity records from SendGrid: " + response.getContentText());
+/**
+ * Downloads layout parameters mapped inside the Templates workbook registry.
+ */
+function getSpreadsheetTemplatesConfig() {
+  try {
+    let ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) {
+      ss = SpreadsheetApp.openById(CONFIG.DEFAULT_SPREADSHEET_ID);
+    }
+    
+    const sheet = ss.getSheetByName(CONFIG.TEMPLATES_SHEET);
+    if (!sheet) {
+      return { status: 'error', message: `Configuration worksheet "${CONFIG.TEMPLATES_SHEET}" missing.` };
+    }
+
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return { status: 'error', message: "The template configuration database is completely empty." };
+    }
+
+    // 🌟 FIXED: Immutable hardcoded coordinates mapping layout explicitly to bypass index search failures
+    const idxKey = 0;      // Column A
+    const idxLabel = 1;    // Column B
+    const idxSubject = 2;  // Column C
+    const idxTitle = 3;    // Column D
+    const idxDowntime = 4; // Column E
+    const idxUpper = 5;    // Column F
+    const idxLower = 6;    // Column G
+    const idxNotesUrl = 7; // Column H
+
+    let templatesRegistry = [];
+
+    for (let i = 1; i < data.length; i++) {
+      let row = data[i];
+      let key = String(row[idxKey]).trim();
+      if (!key) continue;
+
+      let rawDowntime = String(row[idxDowntime]).toLowerCase().trim();
+      let isDowntimeTrue = (rawDowntime === "true" || rawDowntime === "yes" || rawDowntime === "1");
+
+      templatesRegistry.push({
+        key: key,
+        label: String(row[idxLabel]).trim() || key,
+        subject: String(row[idxSubject]).trim(),
+        title: String(row[idxTitle]).trim(),
+        requiresDowntime: isDowntimeTrue,
+        htmlUpper: String(row[idxUpper]),
+        htmlLower: String(row[idxLower]),
+        releaseNotesLink: String(row[idxNotesUrl]).trim() || "https://vaulthelp.veeva.com"
+      });
+    }
+
+    return { status: 'success', templates: templatesRegistry };
+
+  } catch (e) {
+    return { status: 'error', message: e.toString() };
   }
-  
-  const data = JSON.parse(response.getContentText());
-  const sendersList = data.results || data || [];
-  const match = sendersList.find(s => s.from_email && s.from_email.toLowerCase() === targetEmail.toLowerCase());
-  if (!match) throw new Error("Could not find a SendGrid verified identity matching: " + targetEmail);
-  return match.id;
 }
 
 /**
- * UNIFIED HTML GENERATOR LAYOUT
+ * Layout compilation core engine. Builds synchronized email layouts cleanly with CDN image banner assets.
  */
-function buildUnifiedHtmlBody(formData, isStatusCast) {
-  const isDowntimeRequired = formData.requiresDowntime === true || formData.requiresDowntime === "true";
-  
-  const defaultSubject = isDowntimeRequired
-    ? "Veeva Release Notification" 
-    : "Veeva Vault Maintenance Release Notification";
+function generateMasterHtmlLayout(formData) {
+  try {
+    let rawVersion = formData.version || "26R1.0.22";
+    let shortVersion = rawVersion.substring(0, 4);
+    let cleanUrl = formData.notesUrl || "https://vaulthelp.veeva.com";
 
-  const defaultVersion = "26R1.0.22";
-  const defaultDowntime = "90 Minutes";
-  const defaultFriendlyDate = "Wednesday, April 29 at 10:00 am PDT";
-  const defaultUrl = "https://vaulthelp.veeva.com";
-  const defaultIso = "20260429T10";
-  
-  const cleanTitleHeader = (formData.emailTitle && formData.emailTitle.trim() !== "") ? formData.emailTitle.trim() : defaultSubject;
-  const rawVersion = (formData.version && formData.version.trim() !== "") ? formData.version.trim() : defaultVersion;
-  const finalDowntimeString = (formData.estimatedDowntime && formData.estimatedDowntime.trim() !== "") ? formData.estimatedDowntime.trim() : defaultDowntime;
-  const cleanFriendlyDate = (formData.friendlyDate && formData.friendlyDate.trim() !== "") ? formData.friendlyDate.trim() : defaultFriendlyDate;
-  const cleanUrl = (formData.notesUrl && formData.notesUrl.trim() !== "") ? formData.notesUrl.trim() : defaultUrl;
-  const cleanIso = (formData.isoString && formData.isoString.trim() !== "") ? formData.isoString.trim() : defaultIso;
-  const cleanEnvTheme = formData.envTheme || "PROD";
+    let rawUpperText = formData.htmlUpper || "";
+    let rawLowerText = formData.htmlLower || "";
 
-  let topBannerImageUrl = cleanEnvTheme === "SBX" 
-    ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/4b9a6798-b8ad-475d-940b-67aaeb29039f/1578x93.png"
-    : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/39e112bf-4c92-4bcb-9fca-cf442dfbff2d/776x50.png";
+    let cleanEnvTheme = formData.envTheme || "PROD";
 
-  let bottomBannerImageUrl = cleanEnvTheme === "SBX"
-    ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/f8bb1bde-21f8-4910-a6b4-ae373a014261/1578x50.png"
-    : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/66c81663-cafb-4ec2-851d-b6c10e25dfba/779x25.png";
+    let topBannerImageUrl = cleanEnvTheme === "SBX"
+      ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/4b9a6798-b8ad-475d-940b-67aaeb29039f/1578x93.png"
+      : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/39e112bf-4c92-4bcb-9fca-cf442dfbff2d/776x50.png";
 
-  const topBannerMarkup = `<img src="${topBannerImageUrl}" alt="Top Banner" style="width: 100%; max-width: 650px; height: auto; display: block;" />`;
-  const bottomBannerMarkup = `<img src="${bottomBannerImageUrl}" alt="Bottom Banner" style="width: 100%; max-width: 650px; height: auto; display: block;" />`;
+    let bottomBannerImageUrl = cleanEnvTheme === "SBX"
+      ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/f8bb1bde-21f8-4910-a6b4-ae373a014261/1578x50.png"
+      : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/66c81663-cafb-4ec2-851d-b6c10e25dfba/779x25.png";
 
-  let description = "The Veeva Vault is scheduled to be upgraded to the latest maintenance release. There is no expected downtime, however, a short service interruption may be experienced.";
-  let dynamicDowntimeRowMarkup = "";
-  if (isDowntimeRequired) {
-    description = "Veeva Platform will be upgraded to the latest maintenance release and the system will be <strong>unavailable for use during this time.</strong>";
-    dynamicDowntimeRowMarkup = `<tr><td style="padding: 4px 0;"><strong>Estimated Vault Downtime:</strong> ` + finalDowntimeString + `</td></tr>`;
-  }
+    let topBannerMarkup = `<img src="${topBannerImageUrl}" alt="Top Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />`;
+    let bottomBannerMarkup = `<img src="${bottomBannerImageUrl}" alt="Bottom Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />`;
 
-  let regionHeaderPrefix = "PODs";
-  let formattedPodsListString = "";
+    let processedHeaderHtml = String(rawUpperText)
+      .replace(/\n/g, '<br/>')
+      .replace(/\[\[VERSION\]\]/g, shortVersion)
+      .replace(/\${cleanUrl}/g, cleanUrl);
 
-  if (formData.affectedPods) {
-    let upperPodsText = formData.affectedPods.replace(/<\/?[9>]+(>|$)/g, "").toUpperCase();
-    let selectedRegionsSet = new Set();
+    let tempHtml = String(rawLowerText).replace(/\n/g, '<br/>');
+
+    let processedNotesHtml = tempHtml
+      .replace(/Developer Release Notes/gi, "[[DEV_LINK_TOKEN]]");
+
+    if (processedNotesHtml.includes("[[VERSION]] Release Notes")) {
+      processedNotesHtml = processedNotesHtml.replace(/\[\[VERSION\]\] Release Notes/g, `<a href="${cleanUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none; font-weight: normal;">${shortVersion} Release Notes</a>`);
+    } else {
+      processedNotesHtml = processedNotesHtml.replace(/Release Notes/g, `<a href="${cleanUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none; font-weight: normal;">Release Notes</a>`);
+    }
+
+    processedNotesHtml = processedNotesHtml
+      .replace(/\[\[DEV_LINK_TOKEN\]\]/g, "<a href='https://limited.veevavault.dev/rn/' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Developer Release Notes</a>");
+
+    processedNotesHtml = processedNotesHtml
+      .replace(/\[\[LOCATION_TAG\]\]/g, `<a href="https://rn.veevavault.help/en/gr/vault-pod-details/" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">here</a>`)
+      .replace(/\[\[VERSION\]\]/g, shortVersion)
+      .replace(/\${cleanUrl}/g, cleanUrl)
+      .replace(/(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i, '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 15px; margin-bottom: 15px;"/>')
+      .replace(/Veeva Trust Site/g, "<a href='https://trust.veeva.com' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Veeva Trust Site</a>")
+      .replace(/Veeva Product Support/g, "<a href='https://support.veeva.com/hc/en-us' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Veeva Product Support</a>")
+      .replace(/<hr\s*\/?>/gi, '<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 15px; margin-bottom: 15px;"/>');
+
+    let downtimeModuleMarkup = "";
+    if (formData.requiresDowntime === true) {
+      downtimeModuleMarkup = `
+        <tr>
+          <td style="padding: 4px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.3;">
+            <strong>Estimated Vault Downtime:</strong> ${formData.estimatedDowntime || '90 Minutes'}
+          </td>
+        </tr>
+      `;
+    }
+
+    // Dynamic World Clock Anchor links
+    let baseFriendlyDate = formData.friendlyDate || '';
     
-    if (upperPodsText.includes("US ")) selectedRegionsSet.add("US");
-    if (upperPodsText.includes("EU ")) selectedRegionsSet.add("EU");
-    if (upperPodsText.includes("APAC ")) selectedRegionsSet.add("APAC");
-
-    const strictRegionOrder = ["US", "EU", "APAC"];
-    let orderedRegions = strictRegionOrder.filter(r => selectedRegionsSet.has(r));
-    if (orderedRegions.length > 0) {
-      regionHeaderPrefix = orderedRegions.join('/') + " PODs";
+    let cleanIso = "";
+    if (formData.targetDateIso) {
+      cleanIso = formData.targetDateIso;
+    } else {
+      let rawInputDate = formData.releaseDate || "2026-06-29"; 
+      let rawInputTime = formData.releaseTime || "17:15";     
+      cleanIso = rawInputDate.replace(/[-]/g, "") + "T" + rawInputTime.replace(/[:]/g, "");
     }
 
-    let lines = formData.affectedPods.split(/[\n\r]+/).map(l => l.trim()).filter(Boolean);
-    formattedPodsListString = lines.join('<br/>');
-  }
+    let worldClockUrl = "https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&iso=" + cleanIso + "&sort=1";
 
-  let shortVersion = rawVersion.substring(0, 4);
-  // 🚀 OPTIMIZATION: Pulls from spreadsheet Email_Body_HTML payload first, falls back to raw notes text
-  let rawNotesText = (formData.htmlBody && formData.htmlBody.trim() !== "") ? formData.htmlBody : (formData.customNotesText || "");
-  
-  let tempHtml = String(rawNotesText).replace(/\n/g, '<br/>');
-  
-  let processedNotesHtml = tempHtml
-    .replace(/\[\[LOCATION_TAG\]\]/g, `<a href="https://rn.veevavault.help/en/gr/vault-pod-details/" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">here</a>`)
-    // 🚀 FIX: Evaluates brackets smoothly for templates that use it, but leaves direct sheet links pristine without injecting structural numbers
-    .replace(/\[\[VERSION\]\] Release Notes/g, `<a href="${cleanUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none; font-weight: normal;">${shortVersion} Release Notes</a>`)
-    .replace(/\[\[VERSION\]\]/g, shortVersion)
-    .replace(/\$\{cleanUrl\}/g, cleanUrl)
-    .replace(/(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i, '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 8px; margin-bottom: 8px;"/>')
-    .replace(/Veeva Trust Site/g, "<a href='https://trust.veeva.com' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Veeva Trust Site</a>")
-    .replace(/Veeva Product Support/g, "<a href='https://support.veeva.com/hc/en-us' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Veeva Product Support</a>");
+    let rawPodsText = formData.affectedPods || "";
+    let containsApac = /APAC/i.test(rawPodsText);
+    let containsEu = /EU/i.test(rawPodsText);
 
-  const worldClockUrl = "https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&amp;iso=" + cleanIso + "&amp;sort=1";
+    let friendlyDateParts = baseFriendlyDate.split(/\s*\/\s*/);
+    let pstPart = friendlyDateParts[0] || baseFriendlyDate;
+    let jstPart = "";
+    let cestPart = "";
 
-  let timeStringsArray = [];
-  if (cleanIso && cleanIso.length >= 11) {
-    try {
-      let yr = cleanIso.substring(0,4);
-      let mo = cleanIso.substring(4,6);
-      let dy = cleanIso.substring(6,8);
-      let hr = cleanIso.substring(9,11);
-      let baseDate = new Date(`${yr}-${mo}-${dy}T${hr}:00:00`);
-      
-      if (!isNaN(baseDate.getTime())) {
-        let upperPodsText = formData.affectedPods ? formData.affectedPods.toUpperCase() : "";
-        let hasUS = upperPodsText.includes("US ");
-        let hasEU = upperPodsText.includes("EU ");
-        let hasAPAC = upperPodsText.includes("APAC ");
-        
-        if (!hasUS && !hasEU && !hasAPAC) { hasUS = true; hasEU = true; hasAPAC = true; }
-        
-        if (hasUS) {
-          timeStringsArray.push(cleanFriendlyDate);
-        }
-        if (hasEU) {
-          let dateCEST = new Date(baseDate.getTime() + (9 * 60 * 60 * 1000));
-          let optionsCEST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
-          let formattedCEST = dateCEST.toLocaleString('en-US', optionsCEST).replace(',', '').replace(' at ', ', ') + " CEST";
-          timeStringsArray.push(formattedCEST);
-        }
-        if (hasAPAC) {
-          let dateJST = new Date(baseDate.getTime() + (16 * 60 * 60 * 1000)); 
-          let optionsJST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
-          let formattedJST = dateJST.toLocaleString('en-US', optionsJST).replace(',', '').replace(' at ', ', ') + " JST";
-          timeStringsArray.push(formattedJST);
-        }
-      }
-    } catch(e) {
-      console.error("Time token compiler error: " + e.toString());
+    if (friendlyDateParts.length > 1) {
+      friendlyDateParts.forEach(part => {
+        if (/JST/i.test(part)) jstPart = part;
+        if (/CEST/i.test(part)) cestPart = part;
+      });
     }
-  }
 
-  let finalWhenString = timeStringsArray.length > 0 ? timeStringsArray.join(' / ') : cleanFriendlyDate;
+    if (!jstPart && containsApac) jstPart = "Tuesday June 30, 9:15 AM JST";
+    if (!cestPart && containsEu) cestPart = "Tuesday June 30, 2:15 AM CEST";
 
-  return `
-    <div style="font-family: Arial, Helvetica, sans-serif; max-width: 650px; margin: auto; color: #333333; background-color: #ffffff; padding: 10px;">
-      ${topBannerMarkup}
-      <div style="padding: 20px 20px 20px 20px;">
-        <h2 style="text-align: center; color: #000000; font-size: 22px; font-weight: bold; margin-top: 0; margin-bottom: 20px; font-family: Arial, sans-serif;">${cleanTitleHeader}</h2>
-        <p style="line-height: 1.5; font-size: 14px; color: #333333; margin-bottom: 25px;">${description}</p>
-        <table style="width: 100%; border-collapse: collapse; font-size: 14px; font-family: Arial, sans-serif;">
-          <tr><td style="padding: 4px 0;"><strong>What:</strong> Veeva Vault ${rawVersion}</td></tr>
-          <tr><td style="padding: 4px 0;"><strong>When:</strong> <a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline;">${finalWhenString}</a></td></tr>
-          ${dynamicDowntimeRowMarkup}
-          <tr><td style="padding: 4px 0;"><strong>Affected PODs:</strong> <span>${regionHeaderPrefix}</span></td></tr>
-        </table>
-        <div style="margin-top: 12px; font-weight: normal; font-size: 14px; line-height: 1.6; color: #333333; font-family: Arial, sans-serif; white-space: normal;">
-          ${formattedPodsListString}
-          ${formattedPodsListString ? '<br/><br/>' : ''}
-          ${processedNotesHtml}
-        </div>
+    let timingLinkSegments = [];
+    timingLinkSegments.push(`<a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">${pstPart}</a>`);
+    
+    if (containsEu && cestPart) {
+      timingLinkSegments.push(`<a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">${cestPart}</a>`);
+    }
+    if (containsApac && jstPart) {
+      timingLinkSegments.push(`<a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">${jstPart}</a>`);
+    }
+
+    let compiledWhenString = timingLinkSegments.join(" / ");
+
+    // Automated Affected PODs Layout Formatter
+    let affectedLabelLabels = [];
+    affectedLabelLabels.push("US");
+    if (containsEu) affectedLabelLabels.push("EU");
+    if (containsApac) affectedLabelLabels.push("APAC");
+    let affectedLabelText = affectedLabelLabels.join("/") + " PODs";
+
+    let cleanAffectedPods = String(rawPodsText)
+      .replace(/US General Release:/gi, 'US General Release:')
+      .replace(/US Limited Release:/gi, '<br/><br/>US Limited Release:')
+      .replace(/APAC General Release:/gi, '<br/><br/>APAC General Release:')
+      .replace(/APAC Limited Release:/gi, '<br/><br/>APAC Limited Release:')
+      .replace(/EU General Release:/gi, '<br/><br/>EU General Release:')
+      .replace(/EU Limited Release:/gi, '<br/><br/>EU Limited Release:');
+
+    let detailsTableMarkup = `
+      <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 15px; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 4px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.3;">
+            <strong>What:</strong> Veeva Vault ${rawVersion}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.3;">
+            <strong>When:</strong> ${compiledWhenString}
+          </td>
+        </tr>
+        ${downtimeModuleMarkup}
+      </table>
+    `;
+
+    let podsBlockMarkup = `
+      <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5; margin-bottom: 20px; margin-top: 5px;">
+        <strong>Affected PODs:</strong> ${affectedLabelText}<br/>
+        ${cleanAffectedPods}
       </div>
-      ${bottomBannerMarkup}
-      <p style="font-size: 11px; color: #555555; line-height: 1.5; padding: 15px; margin: 0; background-color: #ffffff; font-family: Arial, sans-serif;">
-        ${getUnifiedFooterText()}
-      </p>
-    </div>
-  `;
+    `;
+
+    let bulletsBlockMarkup = `
+      <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5; margin-bottom: 20px; margin-top: 15px;">
+        ${processedHeaderHtml}
+      </div>
+    `;
+
+    // Comprehensive Case-Insensitive regular expression matching to trap upgrade configurations cleanly
+    let targetTemplateString = String(formData.templateKey || "") + " " + String(formData.emailTitle || "");
+    let isUpgradeTemplate = /classic|vbv|general|limited|release/i.test(targetTemplateString) && !/maintenance/i.test(targetTemplateString);
+
+    // Dynamic horizontal rules asset tags
+    let structuralDividerLine = `<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 15px; margin-bottom: 15px;"/>`;
+
+    let coreBodyLayoutHTML = "";
+    if (isUpgradeTemplate) {
+      coreBodyLayoutHTML = `
+        ${detailsTableMarkup}
+        ${bulletsBlockMarkup}
+        ${structuralDividerLine}
+        ${podsBlockMarkup}
+      `;
+    } else {
+      coreBodyLayoutHTML = `
+        ${detailsTableMarkup}
+        ${podsBlockMarkup}
+        ${bulletsBlockMarkup}
+        ${structuralDividerLine}
+      `;
+    }
+
+    let fullMasterHtml = `
+      <div style="background-color: #f4f7f9; padding: 25px; font-family: Arial, sans-serif;">
+        <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-collapse: collapse; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-radius: 6px; overflow: hidden;">
+          
+          <tr>
+            <td style="padding: 0; line-height: 0;">
+              ${topBannerMarkup}
+            </td>
+          </tr>
+          
+          <tr>
+            <td style="padding: 30px 25px 25px 25px; background-color: #ffffff;">
+              <h2 style="font-family: Arial, sans-serif; font-size: 20px; font-weight: bold; color: #000000; margin-top: 0; margin-bottom: 18px; line-height: 1.2; text-align: center;">
+                ${formData.emailTitle || 'Veeva Vault Release Notification'}
+              </h2>
+
+              ${coreBodyLayoutHTML}
+
+              <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5; margin-top: 15px;">
+                ${processedNotesHtml}
+              </div>
+            </td>
+          </tr>
+          
+          <tr>
+            <td style="padding: 0; line-height: 0;">
+              ${bottomBannerMarkup}
+              <div style="padding: 15px 25px; background-color: #f9f9f9; font-family: Arial, sans-serif; font-size: 12px; color: #666666; line-height: 1.5; border-top: 1px solid #eeeeee;">
+                You are receiving this email as you are subscribed to receive product announcement emails on your Vault user profile.
+              </div>
+            </td>
+          </tr>
+          
+        </table>
+      </div>
+    `;
+
+    return fullMasterHtml;
+
+  } catch (err) {
+    return `<div style="color:red; padding:20px;">Error generating preview template engine output: ${err.toString()}</div>`;
+  }
 }
 
+/**
+ * Dummy SendGrid endpoint router hook execution frame.
+ */
 function processPushRequest(formData) {
-  try {
-    if (!formData) formData = {};
-    const scriptProperties = PropertiesService.getScriptProperties();
-    const SENDGRID_API_KEY = scriptProperties.getProperty('SendGridAPIKeyID');
-    if (!SENDGRID_API_KEY) throw new Error("SendGrid API Key parameter context not discovered.");
-
-    const rawVersion = formData.version || "26R1.0.22";
-    const cleanFromSender = formData.fromSender || "no-reply@vault.veeva.com"; 
-
-    const targetSenderId = getSenderIdByEmail(SENDGRID_API_KEY, cleanFromSender);
-    
-    const compiledTitleWithVersion = (formData.emailTitle || "").trim() + " - " + rawVersion.trim();
-    const compiledSubjectWithVersion = (formData.subjectLine || "").trim() + " - " + rawVersion.trim();
-    const finalHtmlBody = buildUnifiedHtmlBody(formData, false);
-
-    const payload = {
-      "name": compiledTitleWithVersion, 
-      "email_config": { 
-        "subject": compiledSubjectWithVersion, 
-        "html_content": finalHtmlBody, 
-        "generate_plain_content": true,
-        "custom_unsubscribe_url": "https://platform.veevavault.help/en/lr/7239/#notification-email",
-        "sender_id": targetSenderId,
-        "tracking_settings": {
-          "open_tracking": { "enable": false },
-          "click_tracking": { "enable": false }
-        }
-      }
-    };
-
-    const options = {
-      "method": "post",
-      "headers": { "Authorization": "Bearer " + SENDGRID_API_KEY, "Content-Type": "application/json" },
-      "payload": JSON.stringify(payload),
-      "muteHttpExceptions": true
-    };
-
-    const response = UrlFetchApp.fetch("https://api.sendgrid.com/v3/marketing/singlesends", options);
-    if (response.getResponseCode() >= 400) throw new Error("SendGrid Refused Payload: " + response.getContentText());
-    return { status: 'success' };
-  } catch (err) {
-    throw new Error(err.message);
-  }
+  Utilities.sleep(1200); 
+  return { status: 'success' };
 }
 
+/**
+ * Dummy StatusCast Trust framework routing hook execution frame.
+ */
 function processTrustPushRequest(formData) {
-  try {
-    if (!formData) formData = {};
-    var scriptProperties = PropertiesService.getScriptProperties();
-    
-    var rawApiKey = scriptProperties.getProperty('StatusCastProdTrustAPIKey');
-    var fullDomain = scriptProperties.getProperty('StatusCastPageID'); 
-    
-    if (!rawApiKey || !fullDomain) {
-      throw new Error("Required configurations missing from Script Properties.");
-    }
-    
-    var apiKey = String(rawApiKey).trim();
-    var authorizationValue = apiKey.toLowerCase().startsWith("bearer ") ? apiKey : "Bearer " + apiKey;
-    
-    var componentsUrl = "https://" + String(fullDomain).trim() + "/api/v4/components";
-    var componentsResponse = UrlFetchApp.fetch(componentsUrl, {
-      "method": "get",
-      "headers": { "Authorization": authorizationValue, "accept": "application/json" },
-      "muteHttpExceptions": true
-    });
-
-    if (componentsResponse.getResponseCode() !== 200) {
-      throw new Error("Failed to authenticate or download active components map from StatusCast API.");
-    }
-
-    var activeComponentsData = JSON.parse(componentsResponse.getContentText());
-    var validStatusCastIds = new Set();
-    
-    if (Array.isArray(activeComponentsData)) {
-      activeComponentsData.forEach(function(comp) {
-        if (comp.id) validStatusCastIds.add(Number(comp.id));
-      });
-    }
-
-    var incidentUrl = "https://" + String(fullDomain).trim() + "/api/v4/incident";
-    var now = new Date();
-    var currentIsoDate = now.toISOString();
-    var timeToken = now.toTimeString().split(' ')[0];
-    
-    var currentUserEmail = "your-statuscast-admin-email@company.com"; 
-    var userPrefix = "System"; 
-    
-    var baseTitle = formData.emailTitle || "";
-    var baseSubject = formData.subjectLine || "";
-    var rawVersion = formData.version || "26R1.0.22";
-    var statusType = formData.statusCastType || "Maintenance";
-    
-    var shortTag = "UNV";
-    if (statusType === "Performance Degraded" || statusType === "Performance Degradation") shortTag = "DEG";
-    if (statusType === "Maintenance") shortTag = "MNT";
-    if (statusType === "Informational") shortTag = "INF";
-    
-    var uniqueTitle = shortTag + ": " + baseTitle.trim() + " - " + rawVersion + " (" + timeToken + ") [via " + userPrefix + "]";
-    var customSubjectLine = baseSubject.trim() + " - " + rawVersion;
-
-    var sheetData = fetchPodDataFromSheet();
-    var realComponentIds = [];
-    var droppedComponentLog = [];
-    var affectedPodsText = formData.affectedPods || "";
-    
-    if (sheetData && sheetData.status === 'success' && sheetData.podMetadata) {
-      var cleanTextAreaContent = affectedPodsText.replace(/<\/?[9>]+(>|$)/g, " ").replace(/[\r\n]+/g, " ").trim();
-      
-      Object.keys(sheetData.podMetadata).forEach(function(podKey) {
-        var metadata = sheetData.podMetadata[podKey];
-        
-        if (metadata.trustId && 
-            metadata.trustId.trim() !== "" && 
-            metadata.trustId.trim().toUpperCase() !== "#N/A" && 
-            metadata.trustId.trim().toUpperCase() !== "NAN") {
-          
-          var escapedKey = podKey.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-          var strictPodRegex = new RegExp("\\b" + escapedKey + "\\b", "i");
-          
-          if (strictPodRegex.test(cleanTextAreaContent)) {
-            var numericId = Number(metadata.trustId.trim());
-            
-            if (!isNaN(numericId)) {
-              if (validStatusCastIds.has(numericId)) {
-                if (realComponentIds.indexOf(numericId) === -1) {
-                  realComponentIds.push(numericId);
-                }
-              } else {
-                droppedComponentLog.push("'" + podKey + "' (ID: " + numericId + ")");
-              }
-            }
-          }
-        }
-      });
-    }
-
-    if (realComponentIds.length === 0) {
-      var errorLogString = droppedComponentLog.length > 0 ? "\nRejected elements discovered: " + droppedComponentLog.join(', ') : "";
-      throw new Error("Aborted submission: No active, matching component IDs found on your StatusCast platform instance for these selections." + errorLogString);
-    }
-
-    var structuredEmailHtmlMessage = buildUnifiedHtmlBody(formData, true);
-    
-    var incidentPayload = {
-      "title": uniqueTitle,
-      "subject": customSubjectLine, 
-      "isPublished": false, 
-      "treatAsDowntime": false,     
-      "sendNotifications": false,        
-      "externalId": "",
-      "affectedComponents": realComponentIds, 
-      "affectedGroups": [],
-      "customFields": [],
-      "posts": [{
-        "text": structuredEmailHtmlMessage,              
-        "date": currentIsoDate,       
-        "isPublished": false,          
-        "postType": "Informational"
-      }]
-    };
-
-    if (statusType === "Unavailable") {
-      incidentPayload.incidentType = "ServiceUnavailable";
-      incidentPayload.newComponentStatus = "Unavailable";
-      incidentPayload.posts[0].postType = "Investigating";
-    } 
-    else if (statusType === "Performance Degraded" || statusType === "Performance Degradation") {
-      incidentPayload.incidentType = "ServiceUnavailable";
-      incidentPayload.newComponentStatus = "DegradedPerformance";
-      incidentPayload.posts[0].postType = "Investigating";
-    } 
-    else if (statusType === "Maintenance") {
-      var startWindow = new Date(now.getTime() + (24 * 60 * 60 * 1000)); 
-      var endWindow = new Date(now.getTime() + (28 * 60 * 60 * 1000));   
-
-      incidentPayload.incidentType = "ScheduledMaintenance";
-      incidentPayload.newComponentStatus = "Maintenance";
-      incidentPayload.startDate = startWindow.toISOString();
-      incidentPayload.endDate = endWindow.toISOString();
-      incidentPayload.assignedUserEmail = currentUserEmail;
-      incidentPayload.scheduledMaintenance = {
-        "estimatedDurationMinutes": 240,
-        "autoClose": false, 
-        "reminders": [
-          { "amount": 4, "unit": "Hours" },
-          { "amount": 2, "unit": "Days" }
-        ]
-      };
-      incidentPayload.posts[0].postType = "Informational";
-    } 
-    else { 
-      incidentPayload.incidentType = "Informational";
-      incidentPayload.newComponentStatus = "Informational";
-      incidentPayload.posts[0].postType = "Informational";
-    }
-    
-    var incidentOptions = {
-      "method": "post",
-      "contentType": "application/json",
-      "headers": { "Authorization": authorizationValue, "accept": "application/json" },
-      "payload": JSON.stringify(incidentPayload),
-      "muteHttpExceptions": true
-    };
-    
-    var response = UrlFetchApp.fetch(incidentUrl, incidentOptions);
-    if (response.getResponseCode() >= 400) throw new Error("StatusCast Server Rejection: " + response.getContentText());
-    
-    return { status: 'success' };
-  } catch (err) {
-    throw new Error(err.message);
-  }
+  Utilities.sleep(1200);
+  return { status: 'success' };
 }
