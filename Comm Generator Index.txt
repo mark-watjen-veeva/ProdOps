@@ -218,8 +218,9 @@
         const subjectInput = document.getElementById('subjectLine');
         const titleInput = document.getElementById('emailTitle');
         const notesField = document.getElementById('emailNotes');
+        const urlInput = document.getElementById('releaseNotes');
         
-        if (!typeSelect || globalTemplatesRegistry.length === 0) return;
+        if (!typeSelect || !globalTemplatesRegistry || globalTemplatesRegistry.length === 0) return;
         const currentKey = typeSelect.value;
         
         const activeMatch = globalTemplatesRegistry.find(t => t.key === currentKey);
@@ -237,9 +238,64 @@
           calculateMatrixSelections();
         }
 
-        if (subjectInput) subjectInput.value = activeMatch.subject;
-        if (titleInput) titleInput.value = activeMatch.title;
-        if (notesField) notesField.value = activeMatch.rawNotes;
+        if (subjectInput) subjectInput.value = activeMatch.subject || "";
+        if (titleInput) titleInput.value = activeMatch.title || "";
+        if (notesField) notesField.value = activeMatch.rawNotes || "";
+
+        if (urlInput) {
+          if (activeMatch && typeof activeMatch.releaseNotesLink !== 'undefined' && activeMatch.releaseNotesLink) {
+            urlInput.value = activeMatch.releaseNotesLink;
+          } else {
+            urlInput.value = "https://vaulthelp.veeva.com";
+          }
+        }
+        
+        const classicBtn = document.getElementById('btn-UPGRADEMODE-Classic');
+        const vbvBtn = document.getElementById('btn-UPGRADEMODE-VBV');
+        const downtimeInput = document.getElementById('estimatedDowntime');
+        const labelText = activeMatch.label ? String(activeMatch.label) : "";
+        
+        if (classicBtn && vbvBtn) {
+          classicBtn.disabled = false;
+          vbvBtn.disabled = false;
+          classicBtn.style.opacity = "1";
+          vbvBtn.style.opacity = "1";
+          classicBtn.classList.remove('active');
+          vbvBtn.classList.remove('active');
+
+          if (/classic/i.test(labelText)) {
+            activeUpgradeModes = ['Classic'];
+            classicBtn.classList.add('active');
+            vbvBtn.disabled = true;
+            vbvBtn.style.opacity = "0.4";
+            if (downtimeInput) downtimeInput.value = "Up to 4 Hours";
+          } 
+          else if (/vbv/i.test(labelText)) {
+            activeUpgradeModes = ['VBV'];
+            vbvBtn.classList.add('active');
+            classicBtn.disabled = true;
+            classicBtn.style.opacity = "0.4";
+            if (downtimeInput) downtimeInput.value = "10 Minutes";
+          } else {
+            activeUpgradeModes = [];
+          }
+
+          let boxes = document.querySelectorAll('.pod-box');
+          boxes.forEach(cb => {
+            let boxRegion = cb.getAttribute('data-region');
+            let boxRelease = cb.getAttribute('data-release');
+            let boxProduct = cb.getAttribute('data-product');
+            let boxUpgradeMode = cb.getAttribute('data-upgrade-mode') ? cb.getAttribute('data-upgrade-mode').toLowerCase().trim() : "";
+            
+            let matchRegion = activeRegions.length === 0 || activeRegions.includes(boxRegion);
+            let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
+            let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
+            let matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.some(mode => mode.toLowerCase().trim() === boxUpgradeMode);
+            
+            cb.checked = matchRegion && matchRelease && matchProduct && matchUpgradeMode;
+          });
+          updateMasterCheckboxState();
+        }
         
         updatePreview();
       }
@@ -327,11 +383,39 @@
           if (index !== -1) { activeProducts.splice(index, 1); document.getElementById(`btn-PRODUCT-${attributeValue}`).classList.remove('active'); }
           else { activeProducts.push(attributeValue); document.getElementById(`btn-PRODUCT-${attributeValue}`).classList.add('active'); }
         } else if (filterType === 'UPGRADEMODE') {
+          if (attributeValue === 'Classic') {
+            let vbvIdx = activeUpgradeModes.indexOf('VBV');
+            if (vbvIdx !== -1) { activeUpgradeModes.splice(vbvIdx, 1); }
+            const vbvBtn = document.getElementById('btn-UPGRADEMODE-VBV');
+            if (vbvBtn) vbvBtn.classList.remove('active');
+          } else if (attributeValue === 'VBV') {
+            let classicIdx = activeUpgradeModes.indexOf('Classic');
+            if (classicIdx !== -1) { activeUpgradeModes.splice(classicIdx, 1); }
+            const classicBtn = document.getElementById('btn-UPGRADEMODE-Classic');
+            if (classicBtn) classicBtn.classList.remove('active');
+          }
+
           let index = activeUpgradeModes.indexOf(attributeValue);
-          if (index !== -1) { activeUpgradeModes.splice(index, 1); document.getElementById(`btn-UPGRADEMODE-${attributeValue}`).classList.remove('active'); }
-          else { activeUpgradeModes.push(attributeValue); document.getElementById(`btn-UPGRADEMODE-${attributeValue}`).classList.add('active'); }
+          if (index !== -1) { 
+            activeUpgradeModes.splice(index, 1); 
+            document.getElementById(`btn-UPGRADEMODE-${attributeValue}`).classList.remove('active'); 
+          } else { 
+            activeUpgradeModes.push(attributeValue); 
+            document.getElementById(`btn-UPGRADEMODE-${attributeValue}`).classList.add('active'); 
+          }
         }
         
+        if (filterType === 'UPGRADEMODE' && activeUpgradeModes.includes(attributeValue)) {
+          const downtimeInput = document.getElementById('estimatedDowntime');
+          if (downtimeInput) {
+            if (attributeValue === 'Classic') {
+              downtimeInput.value = "Up to 4 Hours";
+            } else if (attributeValue === 'VBV') {
+              downtimeInput.value = "10 Minutes";
+            }
+          }
+        }
+
         let boxes = document.querySelectorAll('.pod-box');
         if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
           boxes.forEach(cb => cb.checked = false);
@@ -344,12 +428,12 @@
           let boxRegion = cb.getAttribute('data-region');
           let boxRelease = cb.getAttribute('data-release');
           let boxProduct = cb.getAttribute('data-product');
-          let boxUpgradeMode = cb.getAttribute('data-upgrade-mode');
+          let boxUpgradeMode = cb.getAttribute('data-upgrade-mode') ? cb.getAttribute('data-upgrade-mode').toLowerCase().trim() : "";
           
           let matchRegion = activeRegions.length === 0 || activeRegions.includes(boxRegion);
           let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
           let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
-          let matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.includes(boxUpgradeMode);
+          let matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.some(mode => mode.toLowerCase().trim() === boxUpgradeMode);
           
           cb.checked = matchRegion && matchRelease && matchProduct && matchUpgradeMode;
         });
@@ -407,126 +491,63 @@
       }
 
       function getSafeValue(id, fallback) { const el = document.getElementById(id); return el ? el.value : fallback; }
-
-      function updatePreview() {
+function updatePreview() {
         try {
           const viewport = document.getElementById('dynamicTemplateViewport');
           if (!viewport) return;
 
-          const releaseTypeValue = getSafeValue('releaseType', 'maintenance');
-          const version = getSafeValue('releaseVersion', '26R1.0.22');
-          const friendlyDateRaw = getSafeValue('friendlyDate', 'Wednesday, April 29 at 10:00 am PDT');
-          const url = getSafeValue('releaseNotes', 'https://vaulthelp.veeva.com');
-          const envTheme = getSafeValue('envTheme', 'PROD');
-          const rawIso = getSafeValue('isoStringValue', '20260429T10');
-          const downtimeString = getSafeValue('estimatedDowntime', '90 Minutes');
+          const releaseTypeValue = getSafeValue('releaseType', '');
+          if (!releaseTypeValue || !globalTemplatesRegistry || globalTemplatesRegistry.length === 0) {
+            viewport.innerHTML = "<div style='padding:20px; color:#666;'>Awaiting data initialization config...</div>";
+            return;
+          }
 
-          // 🚀 FIX #3: Map live lookups straight to active spreadsheet HTML configurations
           const activeMatch = globalTemplatesRegistry.find(t => t.key === releaseTypeValue);
-          const isDowntimeRequired = activeMatch ? activeMatch.requiresDowntime : false;
-          const rawNotesText = activeMatch ? activeMatch.htmlBody : getSafeValue('emailNotes', '');
+          
+          // 🌟 FIXED: Evaluates if template is Classic, VBV, General, or Limited Release contextually
+          let targetTemplateString = String(releaseTypeValue || "") + " " + (activeMatch && activeMatch.label ? String(activeMatch.label) : "");
+          let isUpgradeTemplate = /classic|vbv|general|limited|release/i.test(targetTemplateString) && !/maintenance/i.test(targetTemplateString);
 
-          const defaultTitleText = isDowntimeRequired ? "Veeva Release Notification" : "Veeva Vault Maintenance Release Notification";
-          const displayTitle = getSafeValue('emailTitle', defaultTitleText);
+          // Force visibility true if it's an upgrade template, otherwise read cell config flag
+          let isDowntimeRequired = isUpgradeTemplate ? true : (activeMatch ? activeMatch.requiresDowntime : false);
 
           const downtimeWrapper = document.getElementById('downtimeInputWrapper');
-          let dynamicDowntimeRowMarkup = "";
-
-          if (isDowntimeRequired) {
-            if (downtimeWrapper) downtimeWrapper.style.display = "block";
-            dynamicDowntimeRowMarkup = `<tr><td style="padding: 4px 0;"><strong>Estimated Vault Downtime:</strong> ${downtimeString}</td></tr>`;
-          } else {
-            if (downtimeWrapper) downtimeWrapper.style.display = "none";
+          if (downtimeWrapper) {
+            downtimeWrapper.style.display = isDowntimeRequired ? "block" : "none";
           }
 
-          const friendlyDate = friendlyDateRaw.replace(' at ', ', ');
-          let activeTimeStrings = [];
-          const dateTimeInput = document.getElementById('dateTime');
-          
-          if (dateTimeInput && dateTimeInput.value) {
-            const datePDT = new Date(dateTimeInput.value);
-            const currentPodsVal = getSafeValue('affectedPods', '').toUpperCase();
-            let hasEU = currentPodsVal.includes("EU ");
-            let hasAPAC = currentPodsVal.includes("APAC ");
-            
-            activeTimeStrings.push(friendlyDate);
-            if (hasEU) {
-              const dateCEST = new Date(datePDT.getTime() + (9 * 60 * 60 * 1000));
-              const optionsCEST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
-              activeTimeStrings.push(dateCEST.toLocaleString('en-US', optionsCEST).replace(',', '').replace(' at ', ', ') + " CEST");
-            }
-            if (hasAPAC) {
-              const dateJST = new Date(datePDT.getTime() + (16 * 60 * 60 * 1000)); 
-              const optionsJST = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
-              activeTimeStrings.push(dateJST.toLocaleString('en-US', optionsJST).replace(',', '').replace(' at ', ', ') + " JST");
-            }
-          }
-          
-          let displayWhenMarkupString = activeTimeStrings.length > 0 ? activeTimeStrings.join(' / ') : friendlyDate;
+          const formDataPayload = {
+            envTheme: getSafeValue('envTheme', 'PROD'),
+            version: getSafeValue('releaseVersion', '26R1.0.22'),
+            friendlyDate: getSafeValue('friendlyDate', 'Wednesday, April 29 at 10:00 am PDT'),
+            isoString: getSafeValue('isoStringValue', '20260429T10'),
+            rawDateValue: getSafeValue('dateTime', ''),
+            templateKey: releaseTypeValue, // 🌟 ADDED: Passes template key straight to backend structure checks
+            requiresDowntime: isDowntimeRequired,
+            estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes'),
+            emailTitle: getSafeValue('emailTitle', ''),
+            notesUrl: getSafeValue('releaseNotes', 'https://vaulthelp.veeva.com'),
+            customNotesText: getSafeValue('emailNotes', ''),
+            affectedPods: getSafeValue('affectedPods', ''),
+            htmlUpper: activeMatch ? activeMatch.htmlUpper : "",
+            htmlLower: activeMatch ? activeMatch.htmlLower : ""
+          };
 
-          let activePreviewTopBannerUrl = envTheme === "SBX" ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/4b9a6798-b8ad-475d-940b-67aaeb29039f/1578x93.png" : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/39e112bf-4c92-4bcb-9fca-cf442dfbff2d/776x50.png";
-          let activePreviewBottomBannerUrl = envTheme === "SBX" ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/f8bb1bde-21f8-4910-a6b4-ae373a014261/1578x50.png" : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/66c81663-cafb-4ec2-851d-b6c10e25dfba/779x25.png";
-
-          let description = isDowntimeRequired ? "Veeva Platform will be upgraded to the latest maintenance release and the system will be <strong>unavailable for use during this time.</strong>" : "The Veeva Vault is scheduled to be upgraded to the latest maintenance release. There is no expected downtime, however, a short service interruption may be experienced.";
-
-          const affectedPodsTextArea = document.getElementById('affectedPods');
-          let regionHeaderPrefix = "PODs";
-          let htmlOutputLinesBlock = "";
-
-          if (affectedPodsTextArea && affectedPodsTextArea.value && affectedPodsTextArea.value.trim() !== "") {
-            let lines = affectedPodsTextArea.value.split('\n').map(l => l.trim()).filter(Boolean);
-            let activeHeadersFound = [];
-            if (lines.length > 0) {
-              if (affectedPodsTextArea.value.toUpperCase().includes("US ")) activeHeadersFound.push("US");
-              if (affectedPodsTextArea.value.toUpperCase().includes("EU ")) activeHeadersFound.push("EU");
-              if (affectedPodsTextArea.value.toUpperCase().includes("APAC ")) activeHeadersFound.push("APAC");
-              if (activeHeadersFound.length > 0) { regionHeaderPrefix = activeHeadersFound.join('/') + " PODs"; }
-              htmlOutputLinesBlock = lines.join('<br/><br/>');
-            }
+          if (typeof google !== 'undefined' && google.script && google.script.run) {
+            google.script.run
+              .withSuccessHandler(function(generatedHtmlMarkup) {
+                 viewport.innerHTML = generatedHtmlMarkup;
+              })
+              .generateMasterHtmlLayout(formDataPayload);
           }
 
-          let shortVersion = version.substring(0, 4);
-          let podFinderUrl = "https://rn.veevavault.help/en/gr/vault-pod-details/";
-          
-          let linkedNotesRaw = (rawNotesText || "").trim()
-            .replace(/\[\[LOCATION_TAG\]\]/g, '<a href="' + podFinderUrl + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">here</a>')
-            .replace(/\[\[VERSION\]\] Release Notes/g, '<a href="' + url + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none; font-weight: normal;">' + shortVersion + ' Release Notes</a>')
-            .replace(/\[\[VERSION\]\]/g, shortVersion)
-            .replace(/\$\{cleanUrl\}/g, url);
-          
-          let cleanFormattedNotes = linkedNotesRaw.replace(/\n/g, '<br/>')
-            .replace(/(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i, '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 8px; margin-bottom: 8px;"/>')
-            .replace(/Veeva Trust Site/g, '<a href="https://trust.veeva.com" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">Veeva Trust Site</a>')
-            .replace(/Veeva Product Support/g, '<a href="https://support.veeva.com/hc/en-us" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">Veeva Product Support</a>');
-
-          const worldClockUrl = 'https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&amp;iso=' + rawIso + '&amp;sort=1';
-
-          viewport.innerHTML = `
-            <div style="display: block; width: 100%;"><img src="${activePreviewTopBannerUrl}" alt="Veeva Systems" style="display: block; width: 100%; height: auto; border: 0;" /></div>
-            <div class="email-content">
-              <h2 class="veeva-title">${displayTitle}</h2>
-              <p class="veeva-desc">${description}</p>
-              <table class="veeva-details-table">
-                <tr><td><strong>What:</strong> Veeva Vault ${version}</td></tr>
-                <tr><td><strong>When:</strong> <a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: underline; ">${displayWhenMarkupString}</a></td></tr>
-                ${dynamicDowntimeRowMarkup}
-                <tr><td><strong>Affected PODs:</strong> <span>${regionHeaderPrefix}</span></td></tr>
-              </table>
-              <div style="margin-top: 12px; font-weight: normal; font-size: 14px; line-height: 1.6; color: #333333; font-family: Arial, sans-serif; white-space: normal;">
-                ${htmlOutputLinesBlock ? htmlOutputLinesBlock + '<br/><br/>' : ''}
-                ${cleanFormattedNotes}
-              </div>
-            </div>
-            <div style="display: block; width: 100%;"><img src="${activePreviewBottomBannerUrl}" alt="" style="display: block; width: 100%; height: auto; border: 0;" /></div>
-            <p style="font-size: 11px; color: #555555; padding: 15px; margin: 0; background: #fff; font-family: Arial, sans-serif; line-height: 1.5;">${cachedFooterHtml}</p>
-          `;
         } catch (e) { console.error(e); }
       }
 
       function confirmClearForm() { const verified = confirm("Are you sure you want to clear this form? All custom changes will be lost."); if (verified) { executeFormReset(); } }
 
       function executeFormReset() {
-        if (globalTemplatesRegistry.length > 0) { document.getElementById('releaseType').value = globalTemplatesRegistry[0].key; }
+        if (globalTemplatesRegistry && globalTemplatesRegistry.length > 0) { document.getElementById('releaseType').value = globalTemplatesRegistry[0].key; }
         document.getElementById('envTheme').value = "PROD";
         document.getElementById('statusCastType').value = "Maintenance";
         document.getElementById('releaseVersion').value = "26R1.0.22";
@@ -551,18 +572,19 @@
           envTheme: getSafeValue('envTheme', 'PROD'), 
           releaseType: releaseTypeValue,
           requiresDowntime: activeMatch ? activeMatch.requiresDowntime : false,
-          // 🚀 FIX: Securely packs the custom spreadsheet layout string into the API routing array
-          htmlBody: activeMatch ? activeMatch.htmlBody : "",
           statusCastType: getSafeValue('statusCastType', 'Maintenance'),
           emailTitle: getSafeValue('emailTitle', ''),
           subjectLine: getSafeValue('subjectLine', ''),
           version: getSafeValue('releaseVersion', ''),
           friendlyDate: getSafeValue('friendlyDate', ''),
           isoString: getSafeValue('isoStringValue', ''),
+          rawDateValue: getSafeValue('dateTime', ''),
           affectedPods: getSafeValue('affectedPods', '').replace(/\n/g, '<br/>'),
           notesUrl: getSafeValue('releaseNotes', ''),
           customNotesText: getSafeValue('emailNotes', ''),
-          estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes')
+          estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes'),
+          htmlUpper: activeMatch ? activeMatch.htmlUpper : "",
+          htmlLower: activeMatch ? activeMatch.htmlLower : ""
         };
 
         if (targetPlatform === 'SendGrid') {
