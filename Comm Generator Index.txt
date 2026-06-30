@@ -14,17 +14,11 @@
       input, select, textarea { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box; }
       textarea { resize: vertical; font-family: inherit; }
       .email-body { background: white; border: 1px solid #ddd; margin-top: 10px; flex-grow: 1; overflow-y: auto; display: block; font-family: Arial, Helvetica, sans-serif; }
-      .email-content { padding: 25px 20px; color: #333333; }
-      .veeva-title { text-align: center; color: #000000; font-size: 22px; font-weight: bold; margin-top: 0; margin-bottom: 20px; font-family: Arial, sans-serif; }
-      .veeva-desc { line-height: 1.5; font-size: 14px; margin-bottom: 20px; color: #333333; }
-      .preview-pane .veeva-details-table { width: 100%; margin-bottom: 0px; border-collapse: collapse; font-size: 14px; font-family: Arial, sans-serif; }
-      .preview-pane .veeva-details-table td { padding: 4px 0; color: #333333; line-height: 1.25; }
       .push-btn { background-color: #1a73e8; color: white; width: 100%; margin-top: 20px; transition: all 0.3s ease; padding: 12px; font-size: 1.1em; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; text-align: center; outline: none; flex-shrink: 0; }
       .push-btn:hover { background-color: #155cb8; }
       .push-btn.success-state { background-color: #28a745 !important; box-shadow: 0 0 12px rgba(40,167,69,0.4); }
       .trust-btn { background-color: #4a5568; margin-top: 10px; }
       .trust-btn:hover { background-color: #2d3748; }
-      .trust-btn.success-state { background-color: #28a745 !important; box-shadow: 0 0 12px rgba(40,167,69,0.4); }
       .clear-btn { background-color: #dc3545; color: white; width: 100%; margin-top: 15px; transition: all 0.2s ease; padding: 10px; font-size: 1em; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; text-align: center; outline: none; box-sizing: border-box; }
       .clear-btn:hover { background-color: #bd2130; }
       .filter-dashboard { background: #f0f4f8; padding: 12px; border: 1px solid #d0daf0; border-radius: 6px; margin-bottom: 5px; display: flex; flex-direction: column; gap: 8px; }
@@ -88,7 +82,7 @@
 
           <label>Friendly Date Output</label>
           <input type="text" id="friendlyDate" value="Wednesday, April 29 at 10:00 am PDT" oninput="updatePreview()">
-          <input type="hidden" id="isoStringValue" value="20260429T10">
+          <input type="hidden" id="isoStringValue" value="20260429T1000">
 
           <div id="downtimeInputWrapper" class="conditional-input-wrapper">
             <label>Estimated Vault Downtime</label>
@@ -166,7 +160,6 @@
       let activeProducts = [];
       let activeUpgradeModes = [];
       let globalTemplatesRegistry = [];
-      let cachedFooterHtml = 'You are receiving this email as you are subscribed to receive product announcement emails on your Vault user profile.';
 
       window.addEventListener('DOMContentLoaded', function() {
         const now = new Date();
@@ -187,11 +180,12 @@
         if (typeof google !== 'undefined' && google.script && google.script.run) {
           google.script.run
             .withSuccessHandler(populateDynamicTemplatesDropdown)
+            .withFailureHandler(function(err) { alert("Config Load Failed: " + err.toString()); })
             .getSpreadsheetTemplatesConfig();
 
           google.script.run
             .withSuccessHandler(storeAndInitializeDashboard)
-            .withFailureHandler(function(err) { console.log("Backend matrix disconnect."); })
+            .withFailureHandler(function(err) { alert("Pods Load Failed: " + err.toString()); })
             .fetchPodDataFromSheet();
         }
       });
@@ -238,13 +232,19 @@
           calculateMatrixSelections();
         }
 
-        if (subjectInput) subjectInput.value = activeMatch.subject || "";
+       if (subjectInput) {
+          let rawSubject = activeMatch.subject || "REMINDER: Veeva [[VERSION]] Limited Release Notification - Downtime Required";
+          let currentVersionInput = document.getElementById('releaseVersion') ? document.getElementById('releaseVersion').value : "26R1.0.22";
+          let shortVersion = currentVersionInput.substring(0, 4);
+          subjectInput.value = rawSubject.replace(/\[\[VERSION\]\]/gi, shortVersion);
+        }
         if (titleInput) titleInput.value = activeMatch.title || "";
         if (notesField) notesField.value = activeMatch.rawNotes || "";
 
         if (urlInput) {
-          if (activeMatch && typeof activeMatch.releaseNotesLink !== 'undefined' && activeMatch.releaseNotesLink) {
-            urlInput.value = activeMatch.releaseNotesLink;
+          let templateLink = activeMatch.notesUrl || activeMatch.releaseNotesLink;
+          if (templateLink && templateLink.toLowerCase() !== "false") {
+            urlInput.value = templateLink;
           } else {
             urlInput.value = "https://vaulthelp.veeva.com";
           }
@@ -287,7 +287,7 @@
             let boxProduct = cb.getAttribute('data-product');
             let boxUpgradeMode = cb.getAttribute('data-upgrade-mode') ? cb.getAttribute('data-upgrade-mode').toLowerCase().trim() : "";
             
-            let matchRegion = activeRegions.length === 0 || activeRegions.includes(boxRegion);
+            let matchRegion = activeRegions.length === 0 ? (boxRegion === 'US') : activeRegions.includes(boxRegion);
             let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
             let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
             let matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.some(mode => mode.toLowerCase().trim() === boxUpgradeMode);
@@ -312,7 +312,7 @@
         const tokens = input.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
         if (tokens) {
           const isoEl = document.getElementById('isoStringValue');
-          if (isoEl) isoEl.value = tokens[1] + tokens[2] + tokens[3] + 'T' + tokens[4];
+          if (isoEl) isoEl.value = tokens[1] + tokens[2] + tokens[3] + 'T' + tokens[4] + tokens[5];
         }
 
         const date = new Date(input);
@@ -321,20 +321,51 @@
         if (friendlyEl) friendlyEl.value = date.toLocaleString('en-US', options).replace(',', '') + " PDT";
         updatePreview();
       }
+// 🌟 UPDATED: Force handles live token swaps even if spreadsheet objects are caching
+      function inputVersionOverride() {
+        const typeSelect = document.getElementById('releaseType');
+        const subjectInput = document.getElementById('subjectLine');
+        const versionInput = document.getElementById('releaseVersion');
+        
+        if (!subjectInput || !versionInput) return;
+        
+        let shortVersion = versionInput.value.substring(0, 4); // Grabs "50R3"
+        let rawSubject = "";
 
-      function inputVersionOverride() { updatePreview(); }
+        // Strategy A: Try to grab the pristine master template string from sheet memory
+        if (typeSelect && globalTemplatesRegistry && globalTemplatesRegistry.length > 0) {
+          const currentKey = typeSelect.value;
+          const activeMatch = globalTemplatesRegistry.find(t => t.key === currentKey);
+          if (activeMatch && activeMatch.subject) {
+            rawSubject = activeMatch.subject;
+          }
+        }
+        
+        // Strategy B Fallback: If memory is blank, look at what's currently printed on screen
+        if (!rawSubject) {
+          rawSubject = subjectInput.value;
+        }
 
-      function storeAndInitializeDashboard(response) {
+        // Run a deep replacement check
+        if (rawSubject.includes("[[VERSION]]") || rawSubject.includes("[[version]]")) {
+          subjectInput.value = rawSubject.replace(/\[\[VERSION\]\]/gi, shortVersion);
+        } else {
+          // If the token was already converted, refresh it by finding where the old version code sits
+          subjectInput.value = rawSubject.replace(/\b\d{2}R\d{1}\b/g, shortVersion);
+        }
+        
+        updatePreview();
+      }
+
+ function storeAndInitializeDashboard(response) {
         if (!response || response.status !== 'success') return;
         globalIndividualPods = response.individualPods || [];
         podMetadataMap = response.podMetadata || {}; 
-        
-        if (response.footerHtml) { cachedFooterHtml = response.footerHtml; }
 
         let cleanRegions = (response.uniqueRegions || []).filter(region => region !== 'NA');
         buildFilterButtons('regionButtonCluster', cleanRegions, 'REGION');
         buildFilterButtons('releaseButtonCluster', response.uniqueReleases || [], 'RELEASE');
-        buildFilterButtons('productButtonCluster', response.uniqueProducts || [], 'PRODUCT');
+        buildFilterButtons('productButtonCluster', response.uniqueProducts || [], 'PRODUCT'); // Clean and automated!
         renderChecklistOptions();
       }
 
@@ -408,17 +439,17 @@
         if (filterType === 'UPGRADEMODE' && activeUpgradeModes.includes(attributeValue)) {
           const downtimeInput = document.getElementById('estimatedDowntime');
           if (downtimeInput) {
-            if (attributeValue === 'Classic') {
-              downtimeInput.value = "Up to 4 Hours";
-            } else if (attributeValue === 'VBV') {
-              downtimeInput.value = "10 Minutes";
-            }
+            if (attributeValue === 'Classic') { downtimeInput.value = "Up to 4 Hours"; } 
+            else if (attributeValue === 'VBV') { downtimeInput.value = "10 Minutes"; }
           }
         }
 
         let boxes = document.querySelectorAll('.pod-box');
         if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
-          boxes.forEach(cb => cb.checked = false);
+          boxes.forEach(cb => {
+            let boxRegion = cb.getAttribute('data-region');
+            cb.checked = (boxRegion === 'US');
+          });
           updateMasterCheckboxState();
           calculateMatrixSelections();
           return;
@@ -430,7 +461,7 @@
           let boxProduct = cb.getAttribute('data-product');
           let boxUpgradeMode = cb.getAttribute('data-upgrade-mode') ? cb.getAttribute('data-upgrade-mode').toLowerCase().trim() : "";
           
-          let matchRegion = activeRegions.length === 0 || activeRegions.includes(boxRegion);
+          let matchRegion = activeRegions.length === 0 ? (boxRegion === 'US') : activeRegions.includes(boxRegion);
           let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
           let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
           let matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.some(mode => mode.toLowerCase().trim() === boxUpgradeMode);
@@ -491,7 +522,8 @@
       }
 
       function getSafeValue(id, fallback) { const el = document.getElementById(id); return el ? el.value : fallback; }
-function updatePreview() {
+      
+      function updatePreview() {
         try {
           const viewport = document.getElementById('dynamicTemplateViewport');
           if (!viewport) return;
@@ -503,12 +535,8 @@ function updatePreview() {
           }
 
           const activeMatch = globalTemplatesRegistry.find(t => t.key === releaseTypeValue);
-          
-          // 🌟 FIXED: Evaluates if template is Classic, VBV, General, or Limited Release contextually
           let targetTemplateString = String(releaseTypeValue || "") + " " + (activeMatch && activeMatch.label ? String(activeMatch.label) : "");
           let isUpgradeTemplate = /classic|vbv|general|limited|release/i.test(targetTemplateString) && !/maintenance/i.test(targetTemplateString);
-
-          // Force visibility true if it's an upgrade template, otherwise read cell config flag
           let isDowntimeRequired = isUpgradeTemplate ? true : (activeMatch ? activeMatch.requiresDowntime : false);
 
           const downtimeWrapper = document.getElementById('downtimeInputWrapper');
@@ -520,9 +548,10 @@ function updatePreview() {
             envTheme: getSafeValue('envTheme', 'PROD'),
             version: getSafeValue('releaseVersion', '26R1.0.22'),
             friendlyDate: getSafeValue('friendlyDate', 'Wednesday, April 29 at 10:00 am PDT'),
-            isoString: getSafeValue('isoStringValue', '20260429T10'),
+            targetDateIso: getSafeValue('isoStringValue', '20260429T1000'), 
+            isoString: getSafeValue('isoStringValue', '20260429T1000'),
             rawDateValue: getSafeValue('dateTime', ''),
-            templateKey: releaseTypeValue, // 🌟 ADDED: Passes template key straight to backend structure checks
+            templateKey: releaseTypeValue, 
             requiresDowntime: isDowntimeRequired,
             estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes'),
             emailTitle: getSafeValue('emailTitle', ''),
@@ -577,6 +606,7 @@ function updatePreview() {
           subjectLine: getSafeValue('subjectLine', ''),
           version: getSafeValue('releaseVersion', ''),
           friendlyDate: getSafeValue('friendlyDate', ''),
+          targetDateIso: getSafeValue('isoStringValue', ''), 
           isoString: getSafeValue('isoStringValue', ''),
           rawDateValue: getSafeValue('dateTime', ''),
           affectedPods: getSafeValue('affectedPods', '').replace(/\n/g, '<br/>'),
@@ -591,19 +621,29 @@ function updatePreview() {
           const btn = document.getElementById('submitActionBtn');
           if (btn) { btn.innerText = "⏳ Processing Request..."; btn.disabled = true; }
           google.script.run
-            .withSuccessHandler(function() {
-              if (btn) { btn.classList.add('success-state'); btn.innerText = "✓ SendGrid Draft Created!"; btn.disabled = false; setTimeout(() => { btn.classList.remove('success-state'); btn.innerText = "Create SendGrid Draft"; }, 3500); }
+            .withSuccessHandler(function(res) {
+              if (res && res.status === 'error') {
+                alert("API Rejection:\n\n" + res.message);
+                if (btn) { btn.innerText = "Create SendGrid Draft"; btn.disabled = false; }
+              } else {
+                if (btn) { btn.classList.add('success-state'); btn.innerText = "✓ SendGrid Draft Created!"; btn.disabled = false; setTimeout(() => { btn.classList.remove('success-state'); btn.innerText = "Create SendGrid Draft"; }, 3500); }
+              }
             })
-            .withFailureHandler(function(err) { alert("SendGrid Error: " + err.toString()); if (btn) { btn.innerText = "Create SendGrid Draft"; btn.disabled = false; } })
+            .withFailureHandler(function(err) { alert("SendGrid Network Error: " + err.toString()); if (btn) { btn.innerText = "Create SendGrid Draft"; btn.disabled = false; } })
             .processPushRequest(formDataPayload);
         } else {
           const btn = document.getElementById('trustActionBtn');
           if (btn) { btn.innerText = "⏳ Pushing to StatusCast..."; btn.disabled = true; }
           google.script.run
-            .withSuccessHandler(function() {
-              if (btn) { btn.classList.add('success-state'); btn.innerText = "✓ StatusCast Draft Created!"; btn.disabled = false; setTimeout(() => { btn.classList.remove('success-state'); btn.innerText = "Create Trust Draft"; }, 3500); }
+            .withSuccessHandler(function(res) {
+              if (res && res.status === 'error') {
+                alert("API Rejection:\n\n" + res.message);
+                if (btn) { btn.innerText = "Create Trust Draft"; btn.disabled = false; }
+              } else {
+                if (btn) { btn.classList.add('success-state'); btn.innerText = "✓ StatusCast Draft Created!"; btn.disabled = false; setTimeout(() => { btn.classList.remove('success-state'); btn.innerText = "Create Trust Draft"; }, 3500); }
+              }
             })
-            .withFailureHandler(function(err) { alert("StatusCast Failure: " + err.toString()); if (btn) { btn.innerText = "Create Trust Draft"; btn.disabled = false; } })
+            .withFailureHandler(function(err) { alert("StatusCast Network Error: " + err.toString()); if (btn) { btn.innerText = "Create Trust Draft"; btn.disabled = false; } })
             .processTrustPushRequest(formDataPayload);
         }
       }
