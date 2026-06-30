@@ -55,12 +55,12 @@ function fetchPodDataFromSheet() {
       return { status: 'success', individualPods: [], uniqueRegions: [], uniqueReleases: [], uniqueProducts: [] };
     }
 
-    // Immutable hardcoded column indexes matching your spreadsheet layout explicitly
-    const idxRelease = 0; // Column A ("Release")
-    const idxPod = 2;     // Column C ("POD")
-    const idxProduct = 3; // Column D ("Product")
-    const idxRegion = 8;  // Column I ("Region")
-    const idxUpgrade = 9; // Column J ("Upgrade Mode")
+    const idxRelease = 0;   // Column A ("Release")
+    const idxPod = 2;       // Column C ("POD")
+    const idxProduct = 3;   // Column D ("Product")
+    const idxRegion = 8;    // Column I ("Region")
+    const idxUpgrade = 9;   // Column J ("Upgrade Mode")
+    const idxTrustId = 10;  // Column K ("Trust ID / StatusCast mapping link")
 
     let individualPods = [];
     let podMetadata = {};
@@ -70,14 +70,19 @@ function fetchPodDataFromSheet() {
 
     for (let i = 1; i < data.length; i++) {
       let row = data[i];
-      
-      let podName = String(row[idxPod]).trim();
+      let podName = row[idxPod] ? String(row[idxPod]).trim() : "";
       if (!podName) continue; 
 
-      let relVal = String(row[idxRelease]).trim();
-      let prodVal = String(row[idxProduct]).trim();
-      let regVal = String(row[idxRegion]).trim();
-      let upgVal = String(row[idxUpgrade]).trim();
+      let relVal = row[idxRelease] ? String(row[idxRelease]).trim() : "";
+      let prodVal = row[idxProduct] ? String(row[idxProduct]).trim() : "";
+      let regVal = row[idxRegion] ? String(row[idxRegion]).trim() : "";
+      let upgVal = row[idxUpgrade] ? String(row[idxUpgrade]).trim() : "";
+      let trustVal = row[idxTrustId] ? String(row[idxTrustId]).trim() : "";
+
+      // 🌟 EXCLUSION GUARD: Completely drop Vault Basics and LIMS Basics data lines at the data source level
+      if (prodVal === 'Vault Basics' || prodVal === 'LIMS Basics') {
+        continue; 
+      }
 
       if (relVal.includes("/") || relVal.includes("-") || !isNaN(relVal.charAt(0))) {
         continue;
@@ -89,12 +94,13 @@ function fetchPodDataFromSheet() {
         region: regVal || "Unknown",
         release: relVal || "General",
         product: prodVal || "Vault",
-        upgradeMode: upgVal || "Classic"
+        upgradeMode: upgVal || "Classic",
+        trustId: trustVal
       };
 
-      if (regVal && regVal.trim() !== "") regionsSet.add(regVal.trim());
-      if (relVal && relVal.trim() !== "") releasesSet.add(relVal.trim());
-      if (prodVal && prodVal.trim() !== "") productsSet.add(prodVal.trim());
+      if (regVal) regionsSet.add(regVal);
+      if (relVal) releasesSet.add(relVal);
+      if (prodVal) productsSet.add(prodVal);
     }
 
     individualPods.sort((a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'}));
@@ -133,15 +139,15 @@ function getSpreadsheetTemplatesConfig() {
       return { status: 'error', message: "The template configuration database is completely empty." };
     }
 
-    // 🌟 FIXED: Immutable hardcoded coordinates mapping layout explicitly to bypass index search failures
-    const idxKey = 0;      // Column A
-    const idxLabel = 1;    // Column B
-    const idxSubject = 2;  // Column C
-    const idxTitle = 3;    // Column D
-    const idxDowntime = 4; // Column E
-    const idxUpper = 5;    // Column F
-    const idxLower = 6;    // Column G
-    const idxNotesUrl = 7; // Column H
+    // 🌟 Explicit index coordinates mapping Columns G, H, and I flawlessly
+    const idxKey = 0;       // Column A
+    const idxLabel = 1;     // Column B
+    const idxSubject = 2;   // Column C
+    const idxTitle = 3;     // Column D
+    const idxUpper = 5;     // Column F
+    const idxLower = 6;     // Column G (Email_Body_Lower)
+    const idxDowntime = 7;  // Column H (Requires_Downtime)
+    const idxNotesUrl = 8;  // Column I (Release_Notes_URL)
 
     let templatesRegistry = [];
 
@@ -150,18 +156,28 @@ function getSpreadsheetTemplatesConfig() {
       let key = String(row[idxKey]).trim();
       if (!key) continue;
 
-      let rawDowntime = String(row[idxDowntime]).toLowerCase().trim();
+      // Read Column H for structural downtime evaluation rules
+      let rawDowntime = row[idxDowntime] ? String(row[idxDowntime]).toLowerCase().trim() : "";
       let isDowntimeTrue = (rawDowntime === "true" || rawDowntime === "yes" || rawDowntime === "1");
+
+      // Read Column I for explicit custom template URLs safely
+      let sheetUrlValue = row[idxNotesUrl] ? String(row[idxNotesUrl]).trim() : "";
+      let cleanUrl = sheetUrlValue; 
+
+      if (sheetUrlValue === "" || sheetUrlValue.toLowerCase() === "false" || sheetUrlValue.toLowerCase() === "undefined") {
+        cleanUrl = "https://vaulthelp.veeva.com";
+      }
 
       templatesRegistry.push({
         key: key,
-        label: String(row[idxLabel]).trim() || key,
-        subject: String(row[idxSubject]).trim(),
-        title: String(row[idxTitle]).trim(),
+        label: (row[idxLabel] ? String(row[idxLabel]).trim() : "") || key,
+        subject: row[idxSubject] ? String(row[idxSubject]).trim() : "",
+        title: row[idxTitle] ? String(row[idxTitle]).trim() : "",
         requiresDowntime: isDowntimeTrue,
-        htmlUpper: String(row[idxUpper]),
-        htmlLower: String(row[idxLower]),
-        releaseNotesLink: String(row[idxNotesUrl]).trim() || "https://vaulthelp.veeva.com"
+        htmlUpper: row[idxUpper] ? String(row[idxUpper]) : "",
+        htmlLower: row[idxLower] ? String(row[idxLower]) : "",
+        notesUrl: cleanUrl,          
+        releaseNotesLink: cleanUrl 
       });
     }
 
@@ -173,7 +189,92 @@ function getSpreadsheetTemplatesConfig() {
 }
 
 /**
- * Layout compilation core engine. Builds synchronized email layouts cleanly with CDN image banner assets.
+ * Dynamic Timezone Calculator Helper
+ * Converts a Pacific input string (America/Los_Angeles) into correct local PDT/PST, CEST/CET, and JST.
+ */
+function calculateTimezones(rawDateValue) {
+  if (!rawDateValue) return null;
+  
+  const parts = rawDateValue.split(/[-T:]/);
+  if (parts.length < 5) return null;
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1;
+  const day = parseInt(parts[2], 10);
+  const hour = parseInt(parts[3], 10);
+  const minute = parseInt(parts[4], 10);
+  
+  let targetDate = new Date(Date.UTC(year, month, day, hour, minute));
+  for (let i = 0; i < 3; i++) {
+    const ptParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', hour12: false
+    }).formatToParts(targetDate);
+    const ptMap = Object.fromEntries(ptParts.map(p => [p.type, p.value]));
+    const ptUtc = Date.UTC(
+      Number(ptMap.year),
+      Number(ptMap.month) - 1,
+      Number(ptMap.day),
+      Number(ptMap.hour) === 24 ? 0 : Number(ptMap.hour),
+      Number(ptMap.minute)
+    );
+    const diff = ptUtc - Date.UTC(year, month, day, hour, minute);
+    if (diff === 0) break;
+    targetDate = new Date(targetDate.getTime() - diff);
+  }
+
+  function formatForTimezone(date, timeZone) {
+    const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone }).format(date);
+    const monthName = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone }).format(date);
+    const dayVal = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone }).format(date);
+    const hourParts = new Intl.DateTimeFormat('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true, 
+      timeZone 
+    }).formatToParts(date);
+    const hourVal = hourParts.find(p => p.type === 'hour').value;
+    const minuteVal = hourParts.find(p => p.type === 'minute').value;
+    const dayPeriod = hourParts.find(p => p.type === 'dayPeriod').value;
+    
+    let tzName = "";
+    if (timeZone === 'Europe/Paris') {
+      const longTzParts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'long' }).formatToParts(date);
+      const longTzName = longTzParts.find(p => p.type === 'timeZoneName')?.value || "";
+      if (longTzName.toLowerCase().includes('summer') || longTzName.toLowerCase().includes('daylight')) {
+        tzName = 'CEST';
+      } else {
+        tzName = 'CET';
+      }
+    }
+    
+    if (timeZone === 'Asia/Tokyo') {
+      tzName = 'JST';
+    }
+
+    if (timeZone === 'America/Los_Angeles') {
+      const longTzParts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'long' }).formatToParts(date);
+      const longTzName = longTzParts.find(p => p.type === 'timeZoneName')?.value || "";
+      if (longTzName.toLowerCase().includes('daylight') || longTzName.toLowerCase().includes('summer')) {
+        tzName = 'PDT';
+      } else {
+        tzName = 'PST';
+      }
+    }
+    
+    return `${weekday} ${monthName} ${dayVal} at ${hourVal}:${minuteVal} ${dayPeriod} ${tzName}`;
+  }
+
+  return {
+    pt: formatForTimezone(targetDate, 'America/Los_Angeles'),
+    cest: formatForTimezone(targetDate, 'Europe/Paris'),
+    jst: formatForTimezone(targetDate, 'Asia/Tokyo'),
+    iso: year.toString() + (month + 1).toString().padStart(2, '0') + day.toString().padStart(2, '0') + 'T' + hour.toString().padStart(2, '0') + minute.toString().padStart(2, '0')
+  };
+}
+
+/**
+ * Layout compilation core engine. Builds synchronized email layouts cleanly with tightened spacing alignments.
  */
 function generateMasterHtmlLayout(formData) {
   try {
@@ -183,7 +284,6 @@ function generateMasterHtmlLayout(formData) {
 
     let rawUpperText = formData.htmlUpper || "";
     let rawLowerText = formData.htmlLower || "";
-
     let cleanEnvTheme = formData.envTheme || "PROD";
 
     let topBannerImageUrl = cleanEnvTheme === "SBX"
@@ -196,17 +296,17 @@ function generateMasterHtmlLayout(formData) {
 
     let topBannerMarkup = `<img src="${topBannerImageUrl}" alt="Top Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />`;
     let bottomBannerMarkup = `<img src="${bottomBannerImageUrl}" alt="Bottom Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />`;
-
+    
     let processedHeaderHtml = String(rawUpperText)
-      .replace(/\n/g, '<br/>')
+      .replace(/\r?\n/g, '<br/>')
+      .replace(/(<br\s*\/?>\s*){2,}/gi, '<br/>')
       .replace(/\[\[VERSION\]\]/g, shortVersion)
       .replace(/\${cleanUrl}/g, cleanUrl);
-
-    let tempHtml = String(rawLowerText).replace(/\n/g, '<br/>');
+      
+    let tempHtml = String(rawLowerText).replace(/\r?\n/g, '<br/>').replace(/(<br\s*\/?>\s*){2,}/gi, '<br/>');
 
     let processedNotesHtml = tempHtml
       .replace(/Developer Release Notes/gi, "[[DEV_LINK_TOKEN]]");
-
     if (processedNotesHtml.includes("[[VERSION]] Release Notes")) {
       processedNotesHtml = processedNotesHtml.replace(/\[\[VERSION\]\] Release Notes/g, `<a href="${cleanUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none; font-weight: normal;">${shortVersion} Release Notes</a>`);
     } else {
@@ -214,42 +314,49 @@ function generateMasterHtmlLayout(formData) {
     }
 
     processedNotesHtml = processedNotesHtml
-      .replace(/\[\[DEV_LINK_TOKEN\]\]/g, "<a href='https://limited.veevavault.dev/rn/' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Developer Release Notes</a>");
-
-    processedNotesHtml = processedNotesHtml
+      .replace(/\[\[DEV_LINK_TOKEN\]\]/g, "<a href='https://limited.veevavault.dev/rn/' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Developer Release Notes</a>")
       .replace(/\[\[LOCATION_TAG\]\]/g, `<a href="https://rn.veevavault.help/en/gr/vault-pod-details/" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">here</a>`)
       .replace(/\[\[VERSION\]\]/g, shortVersion)
       .replace(/\${cleanUrl}/g, cleanUrl)
-      .replace(/(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i, '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 15px; margin-bottom: 15px;"/>')
+      .replace(/(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i, '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 10px; margin-bottom: 10px;"/>')
       .replace(/Veeva Trust Site/g, "<a href='https://trust.veeva.com' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Veeva Trust Site</a>")
       .replace(/Veeva Product Support/g, "<a href='https://support.veeva.com/hc/en-us' clicktracking='off' target='_blank' style='color: #007bff; text-decoration: none;'>Veeva Product Support</a>")
-      .replace(/<hr\s*\/?>/gi, '<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 15px; margin-bottom: 15px;"/>');
+      .replace(/<hr\s*\/?>/gi, '<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 10px; margin-bottom: 10px;"/>');
 
     let downtimeModuleMarkup = "";
     if (formData.requiresDowntime === true) {
       downtimeModuleMarkup = `
         <tr>
-          <td style="padding: 4px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.3;">
+          <td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.2;">
             <strong>Estimated Vault Downtime:</strong> ${formData.estimatedDowntime || '90 Minutes'}
           </td>
         </tr>
       `;
     }
 
-    // Dynamic World Clock Anchor links
     let baseFriendlyDate = formData.friendlyDate || '';
-    
     let cleanIso = "";
-    if (formData.targetDateIso) {
-      cleanIso = formData.targetDateIso;
-    } else {
-      let rawInputDate = formData.releaseDate || "2026-06-29"; 
-      let rawInputTime = formData.releaseTime || "17:15";     
-      cleanIso = rawInputDate.replace(/[-]/g, "") + "T" + rawInputTime.replace(/[:]/g, "");
+    let calculatedTimes = null;
+    if (formData.rawDateValue) {
+      calculatedTimes = calculateTimezones(formData.rawDateValue);
+      if (calculatedTimes) {
+        cleanIso = calculatedTimes.iso;
+      }
+    }
+
+    if (!cleanIso) {
+      if (formData.targetDateIso) {
+        cleanIso = formData.targetDateIso;
+      } else if (formData.isoString) {
+        cleanIso = formData.isoString;
+      } else {
+        let rawInputDate = formData.releaseDate || "2026-06-29";
+        let rawInputTime = formData.releaseTime || "17:15";     
+        cleanIso = rawInputDate.replace(/[-]/g, "") + "T" + rawInputTime.replace(/[:]/g, "");
+      }
     }
 
     let worldClockUrl = "https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&iso=" + cleanIso + "&sort=1";
-
     let rawPodsText = formData.affectedPods || "";
     let containsApac = /APAC/i.test(rawPodsText);
     let containsEu = /EU/i.test(rawPodsText);
@@ -258,7 +365,6 @@ function generateMasterHtmlLayout(formData) {
     let pstPart = friendlyDateParts[0] || baseFriendlyDate;
     let jstPart = "";
     let cestPart = "";
-
     if (friendlyDateParts.length > 1) {
       friendlyDateParts.forEach(part => {
         if (/JST/i.test(part)) jstPart = part;
@@ -266,8 +372,12 @@ function generateMasterHtmlLayout(formData) {
       });
     }
 
-    if (!jstPart && containsApac) jstPart = "Tuesday June 30, 9:15 AM JST";
-    if (!cestPart && containsEu) cestPart = "Tuesday June 30, 2:15 AM CEST";
+    if (!jstPart && containsApac) {
+      jstPart = calculatedTimes ? calculatedTimes.jst : "Tuesday June 30, 9:15 AM JST";
+    }
+    if (!cestPart && containsEu) {
+      cestPart = calculatedTimes ? calculatedTimes.cest : "Tuesday June 30, 2:15 AM CEST";
+    }
 
     let timingLinkSegments = [];
     timingLinkSegments.push(`<a href="${worldClockUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">${pstPart}</a>`);
@@ -281,30 +391,31 @@ function generateMasterHtmlLayout(formData) {
 
     let compiledWhenString = timingLinkSegments.join(" / ");
 
-    // Automated Affected PODs Layout Formatter
     let affectedLabelLabels = [];
     affectedLabelLabels.push("US");
     if (containsEu) affectedLabelLabels.push("EU");
     if (containsApac) affectedLabelLabels.push("APAC");
     let affectedLabelText = affectedLabelLabels.join("/") + " PODs";
-
+    
     let cleanAffectedPods = String(rawPodsText)
+      .replace(/(\r?\n){2,}/g, '<br/>')
       .replace(/US General Release:/gi, 'US General Release:')
-      .replace(/US Limited Release:/gi, '<br/><br/>US Limited Release:')
-      .replace(/APAC General Release:/gi, '<br/><br/>APAC General Release:')
-      .replace(/APAC Limited Release:/gi, '<br/><br/>APAC Limited Release:')
-      .replace(/EU General Release:/gi, '<br/><br/>EU General Release:')
-      .replace(/EU Limited Release:/gi, '<br/><br/>EU Limited Release:');
+      .replace(/US Limited Release:/gi, '<br/>US Limited Release:')
+      .replace(/APAC General Release:/gi, '<br/>APAC General Release:')
+      .replace(/APAC Limited Release:/gi, '<br/>APAC Limited Release:')
+      .replace(/EU General Release:/gi, '<br/>EU General Release:')
+      .replace(/EU Limited Release:/gi, '<br/>EU Limited Release:');
 
+    // Spacing optimization: 0px bottom margin pulls When and Affected PODs tightly together
     let detailsTableMarkup = `
-      <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 15px; border-collapse: collapse;">
+      <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 0px; border-collapse: collapse;">
         <tr>
-          <td style="padding: 4px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.3;">
+          <td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.2;">
             <strong>What:</strong> Veeva Vault ${rawVersion}
           </td>
         </tr>
         <tr>
-          <td style="padding: 4px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.3;">
+          <td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.2;">
             <strong>When:</strong> ${compiledWhenString}
           </td>
         </tr>
@@ -312,25 +423,35 @@ function generateMasterHtmlLayout(formData) {
       </table>
     `;
 
-    let podsBlockMarkup = `
-      <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5; margin-bottom: 20px; margin-top: 5px;">
-        <strong>Affected PODs:</strong> ${affectedLabelText}<br/>
-        ${cleanAffectedPods}
-      </div>
-    `;
-
-    let bulletsBlockMarkup = `
-      <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5; margin-bottom: 20px; margin-top: 15px;">
+  let bulletsBlockMarkup = `
+      <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.4; margin-bottom: 0px; margin-top: 5px;">
         ${processedHeaderHtml}
       </div>
     `;
 
-    // Comprehensive Case-Insensitive regular expression matching to trap upgrade configurations cleanly
     let targetTemplateString = String(formData.templateKey || "") + " " + String(formData.emailTitle || "");
     let isUpgradeTemplate = /classic|vbv|general|limited|release/i.test(targetTemplateString) && !/maintenance/i.test(targetTemplateString);
+    
+    // Tightened the top margin from 10px to 5px to close the gap
+    let structuralDividerLine = `<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 5px; margin-bottom: 10px;"/>`;
 
-    // Dynamic horizontal rules asset tags
-    let structuralDividerLine = `<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 15px; margin-bottom: 15px;"/>`;
+    // Choose styling layouts based entirely on downtime criteria states
+    let podsBlockMarkup = "";
+    if (isUpgradeTemplate) {
+      podsBlockMarkup = `
+        <div style="font-family: Arial, sans-serif; font-size: 16px; text-align: center; color: #333333; line-height: 1.4; margin-bottom: 10px; margin-top: 5px;">
+          <strong>Affected PODs and Deployment Start Time</strong><br/><br/>
+          ${cleanAffectedPods}
+        </div>
+      `;
+    } else {
+      podsBlockMarkup = `
+        <div style="font-family: Arial, sans-serif; font-size: 14px; text-align: left; color: #333333; line-height: 1.4; margin-bottom: 10px; margin-top: 5px;">
+          <strong>Affected PODs:</strong> ${affectedLabelText}<br/><br/>
+          ${cleanAffectedPods}
+        </div>
+      `;
+    }
 
     let coreBodyLayoutHTML = "";
     if (isUpgradeTemplate) {
@@ -352,40 +473,33 @@ function generateMasterHtmlLayout(formData) {
     let fullMasterHtml = `
       <div style="background-color: #f4f7f9; padding: 25px; font-family: Arial, sans-serif;">
         <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-collapse: collapse; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-radius: 6px; overflow: hidden;">
-          
           <tr>
             <td style="padding: 0; line-height: 0;">
               ${topBannerMarkup}
             </td>
           </tr>
-          
           <tr>
-            <td style="padding: 30px 25px 25px 25px; background-color: #ffffff;">
-              <h2 style="font-family: Arial, sans-serif; font-size: 20px; font-weight: bold; color: #000000; margin-top: 0; margin-bottom: 18px; line-height: 1.2; text-align: center;">
+            <td style="padding: 20px 20px 20px 20px; background-color: #ffffff;">
+              <h2 style="font-family: Arial, sans-serif; font-size: 20px; font-weight: bold; color: #000000; margin-top: 0; margin-bottom: 12px; line-height: 1.2; text-align: center;">
                 ${formData.emailTitle || 'Veeva Vault Release Notification'}
               </h2>
-
               ${coreBodyLayoutHTML}
-
-              <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5; margin-top: 15px;">
+              <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.4; margin-top: 10px;">
                 ${processedNotesHtml}
               </div>
             </td>
           </tr>
-          
           <tr>
             <td style="padding: 0; line-height: 0;">
               ${bottomBannerMarkup}
-              <div style="padding: 15px 25px; background-color: #f9f9f9; font-family: Arial, sans-serif; font-size: 12px; color: #666666; line-height: 1.5; border-top: 1px solid #eeeeee;">
+              <div style="padding: 10px 20px; background-color: #f9f9f9; font-family: Arial, sans-serif; font-size: 12px; color: #666666; line-height: 1.4; border-top: 1px solid #eeeeee;">
                 You are receiving this email as you are subscribed to receive product announcement emails on your Vault user profile.
               </div>
             </td>
           </tr>
-          
         </table>
       </div>
     `;
-
     return fullMasterHtml;
 
   } catch (err) {
@@ -394,17 +508,271 @@ function generateMasterHtmlLayout(formData) {
 }
 
 /**
- * Dummy SendGrid endpoint router hook execution frame.
+ * Helper dependency function to resolve specific numerical Sender Profile IDs inside SendGrid's dashboard mapping
  */
-function processPushRequest(formData) {
-  Utilities.sleep(1200); 
-  return { status: 'success' };
+function getSenderIdByEmail(apiKey, senderEmail) {
+  try {
+    const url = "https://api.sendgrid.com/v3/verified_senders";
+    const options = {
+      "method": "get",
+      "headers": { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json" },
+      "muteHttpExceptions": true
+    };
+    const response = UrlFetchApp.fetch(url, options);
+    if (response.getResponseCode() !== 200) return null;
+    
+    const sendersData = JSON.parse(response.getContentText());
+    const sendersList = Array.isArray(sendersData) ? sendersData : (sendersData.results || []);
+    
+    const verifiedMatch = sendersList.find(s => String(s.from_email).toLowerCase().trim() === String(senderEmail).toLowerCase().trim());
+    return verifiedMatch ? verifiedMatch.id : null;
+  } catch (e) {
+    console.error("Sender verification routing exception: " + e.toString());
+    return null;
+  }
 }
 
 /**
- * Dummy StatusCast Trust framework routing hook execution frame.
+ * LIVE SendGrid Endpoint Single-Send API Transmission Router
+ */
+function processPushRequest(formData) {
+  try {
+    if (!formData) formData = {};
+    const scriptProperties = PropertiesService.getScriptProperties();
+    const SENDGRID_API_KEY = scriptProperties.getProperty('SendGridAPIKeyID');
+    if (!SENDGRID_API_KEY) throw new Error("SendGrid API Key parameter context not discovered.");
+    const rawVersion = formData.version || "26R1.0.22";
+    
+   const cleanReleaseType = formData.releaseType || "Maintenance Only";
+    
+    const defaultSubject = (cleanReleaseType === "Downtime Required") 
+      ? "Veeva Release Notification" 
+      : "Veeva Vault Maintenance Release Notification";
+      
+    // 🌟 DYNAMIC FIX: Read the subject line and swap out [[VERSION]] tokens dynamically
+    let baseSubjectText = formData.subjectLine || defaultSubject;
+    let shortVersion = rawVersion.substring(0, 4); // Grabs "26R1" format
+    
+    let cleanSubject = baseSubjectText.replace(/\[\[VERSION\]\]/gi, shortVersion);
+    const cleanEmailTitle = formData.emailTitle || cleanSubject;
+    const cleanFromSender = formData.fromSender || "no-reply@vault.veeva.com"; 
+
+    const targetSenderId = getSenderIdByEmail(SENDGRID_API_KEY, cleanFromSender);
+    const compiledTitleWithVersion = cleanEmailTitle.trim() + " - " + rawVersion.trim();
+    
+    // 🌟 DYNAMIC FIX: If you already have [[VERSION]] in the string, use it. Otherwise, append raw version to the end as a fallback.
+    const compiledSubjectWithVersion = baseSubjectText.includes("[[VERSION]]") || baseSubjectText.includes("[[version]]")
+      ? cleanSubject.trim()
+      : cleanSubject.trim() + " - " + rawVersion.trim();
+    
+    const finalHtmlBody = generateMasterHtmlLayout(formData);
+
+    const payload = {
+      "name": compiledTitleWithVersion, 
+      "email_config": { 
+        "subject": compiledSubjectWithVersion, 
+        "html_content": finalHtmlBody, 
+        "generate_plain_content": true,
+        "custom_unsubscribe_url": "https://platform.veevavault.help/en/lr/7239/#notification-email",
+        "sender_id": targetSenderId,
+        "tracking_settings": {
+          "open_tracking": { "enable": false },
+          "click_tracking": { "enable": false }
+        }
+      }
+    };
+
+    const options = {
+      "method": "post",
+      "headers": { "Authorization": "Bearer " + SENDGRID_API_KEY, "Content-Type": "application/json" },
+      "payload": JSON.stringify(payload),
+      "muteHttpExceptions": true
+    };
+
+    const response = UrlFetchApp.fetch("https://api.sendgrid.com/v3/marketing/singlesends", options);
+    
+    if (response.getResponseCode() >= 400) {
+      return { status: 'error', message: "SendGrid Refused Payload: " + response.getContentText() };
+    }
+    return { status: 'success' };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  }
+}
+
+/**
+ * LIVE StatusCast Trust Incident Generation Request Framework
  */
 function processTrustPushRequest(formData) {
-  Utilities.sleep(1200);
-  return { status: 'success' };
+  try {
+    if (!formData) formData = {};
+    var scriptProperties = PropertiesService.getScriptProperties();
+    
+    var rawApiKey = scriptProperties.getProperty('StatusCastProdTrustAPIKey');
+    var fullDomain = scriptProperties.getProperty('StatusCastPageID');
+    if (!rawApiKey || !fullDomain) {
+      throw new Error("Required configurations missing from Script Properties.");
+    }
+    
+    var apiKey = String(rawApiKey).trim();
+    var authorizationValue = apiKey.toLowerCase().startsWith("bearer ") ? apiKey : "Bearer " + apiKey;
+    
+    var componentsUrl = "https://" + String(fullDomain).trim() + "/api/v4/components";
+    var componentsResponse = UrlFetchApp.fetch(componentsUrl, {
+      "method": "get",
+      "headers": { "Authorization": authorizationValue, "accept": "application/json" },
+      "muteHttpExceptions": true
+    });
+    if (componentsResponse.getResponseCode() !== 200) {
+      throw new Error("Failed to authenticate or download active components map from StatusCast API.");
+    }
+
+    var activeComponentsData = JSON.parse(componentsResponse.getContentText());
+    var validStatusCastIds = new Set();
+    if (Array.isArray(activeComponentsData)) {
+      activeComponentsData.forEach(function(comp) {
+        if (comp.id) validStatusCastIds.add(Number(comp.id));
+      });
+    }
+
+    var incidentUrl = "https://" + String(fullDomain).trim() + "/api/v4/incident";
+    var now = new Date();
+    var currentIsoDate = now.toISOString();
+    var timeToken = now.toTimeString().split(' ')[0];
+    
+    var currentUserEmail = "your-statuscast-admin-email@company.com"; 
+    var userPrefix = "System";
+    var cleanReleaseType = formData.releaseType || "Maintenance Only";
+    var defaultSubject = (cleanReleaseType === "Downtime Required") 
+      ? "Veeva Release Notification" 
+      : "Veeva Vault Maintenance Release Notification";
+    
+    var baseTitle = formData.emailTitle || defaultSubject;
+    var baseSubject = formData.subjectLine || defaultSubject;
+    var rawVersion = formData.version || "26R1.0.22";
+    var statusType = formData.statusCastType || "Maintenance";
+    var shortTag = "UNV";
+    if (statusType === "Performance Degraded" || statusType === "Performance Degradation") shortTag = "DEG";
+    if (statusType === "Maintenance") shortTag = "MNT";
+    if (statusType === "Informational") shortTag = "INF";
+    var uniqueTitle = shortTag + ": " + baseTitle.trim() + " - " + rawVersion + " (" + timeToken + ") [via " + userPrefix + "]";
+    var customSubjectLine = baseSubject.trim() + " - " + rawVersion;
+
+    var sheetData = fetchPodDataFromSheet();
+    var realComponentIds = [];
+    var droppedComponentLog = [];
+    var affectedPodsText = formData.affectedPods || "";
+    if (sheetData && sheetData.status === 'success' && sheetData.podMetadata) {
+      var cleanTextAreaContent = affectedPodsText.replace(/<\/?[^>]+(>|$)/g, " ").replace(/[\r\n]+/g, " ").trim();
+      Object.keys(sheetData.podMetadata).forEach(function(podKey) {
+        var metadata = sheetData.podMetadata[podKey];
+        
+        if (metadata.trustId && 
+            metadata.trustId.trim() !== "" && 
+            metadata.trustId.trim().toUpperCase() !== "#N/A" && 
+            metadata.trustId.trim().toUpperCase() !== "NAN") {
+          
+          var escapedKey = podKey.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+          var strictPodRegex = new RegExp("\\b" + escapedKey + "\\b", "i");
+          
+          if (strictPodRegex.test(cleanTextAreaContent)) {
+            var numericId = Number(metadata.trustId.trim());
+            
+            if (!isNaN(numericId)) {
+              if (validStatusCastIds.has(numericId)) {
+                if (realComponentIds.indexOf(numericId) === -1) {
+                  realComponentIds.push(numericId);
+                }
+              } else {
+                droppedComponentLog.push("'" + podKey + "' (ID: " + numericId + ")");
+              }
+            }
+          }
+        }
+      });
+    }
+
+    if (realComponentIds.length === 0) {
+      return { status: 'error', message: "Aborted submission: No active component IDs found." };
+    }
+
+    if (droppedComponentLog.length > 0) {
+      console.warn("Auto-filtered out inactive StatusCast IDs from payload transmission: " + JSON.stringify(droppedComponentLog));
+    }
+
+    var structuredEmailHtmlMessage = generateMasterHtmlLayout(formData);
+    
+    var incidentPayload = {
+      "title": uniqueTitle,
+      "subject": customSubjectLine, 
+      "isPublished": false, 
+      "treatAsDowntime": false,     
+      "sendNotifications": false,        
+      "externalId": "",
+      "affectedComponents": realComponentIds, 
+      "affectedGroups": [],
+      "customFields": [],
+      "posts": [{
+        "text": structuredEmailHtmlMessage,              
+        "date": currentIsoDate,       
+        "isPublished": false,          
+        "postType": "Informational"
+      }]
+    };
+    if (statusType === "Unavailable") {
+      incidentPayload.incidentType = "ServiceUnavailable";
+      incidentPayload.newComponentStatus = "Unavailable";
+      incidentPayload.posts[0].postType = "Investigating";
+    } 
+    else if (statusType === "Performance Degraded" || statusType === "Performance Degradation") {
+      incidentPayload.incidentType = "ServiceUnavailable";
+      incidentPayload.newComponentStatus = "DegradedPerformance";
+      incidentPayload.posts[0].postType = "Investigating";
+    } 
+    else if (statusType === "Maintenance") {
+      var startWindow = new Date(now.getTime() + (24 * 60 * 60 * 1000));
+      var endWindow = new Date(now.getTime() + (28 * 60 * 60 * 1000));   
+
+      incidentPayload.incidentType = "ScheduledMaintenance";
+      incidentPayload.newComponentStatus = "Maintenance";
+      incidentPayload.startDate = startWindow.toISOString();
+      incidentPayload.endDate = endWindow.toISOString();
+      incidentPayload.assignedUserEmail = currentUserEmail;
+      incidentPayload.scheduledMaintenance = {
+        "estimatedDurationMinutes": 240,
+        "autoClose": false, 
+        "reminders": [
+          { "amount": 4, "unit": "Hours" },
+          { "amount": 2, "unit": "Days" }
+        ]
+      };
+      incidentPayload.posts[0].postType = "Informational";
+    } 
+    else { 
+      incidentPayload.incidentType = "Informational";
+      incidentPayload.newComponentStatus = "Informational";
+      incidentPayload.posts[0].postType = "Informational";
+    }
+    
+    var incidentOptions = {
+      "method": "post",
+      "contentType": "application/json",
+      "headers": { 
+        "Authorization": authorizationValue, 
+        "accept": "application/json" 
+      },
+      "payload": JSON.stringify(incidentPayload),
+      "muteHttpExceptions": true
+    };
+    var response = UrlFetchApp.fetch(incidentUrl, incidentOptions);
+    var responseCode = response.getResponseCode();
+    
+    if (responseCode >= 400) {
+      return { status: 'error', message: "StatusCast Server Rejection: " + response.getContentText() };
+    }
+    
+    return { status: 'success' };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  }
 }
