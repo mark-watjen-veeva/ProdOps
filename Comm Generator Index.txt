@@ -1,3 +1,6 @@
+
+
+Index clean · HTML
 <!DOCTYPE html>
 <html>
   <head>
@@ -13,7 +16,7 @@
       .field-tooltip { font-size: 0.75em; color: #666; font-style: italic; display: block; margin-top: -2px; margin-bottom: 2px; }
       input, select, textarea { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100%; box-sizing: border-box; }
       textarea { resize: vertical; font-family: inherit; }
-      .email-body { background: white; border: 1px solid #ddd; margin-top: 10px; flex-grow: 1; overflow-y: auto; display: block; font-family: Arial, Helvetica, sans-serif; }
+      .email-body { background: white; border: 1px solid #ddd; margin-top: 10px; flex-grow: 1; overflow-y: auto; display: block; font-family: Arial, Helvetica, sans-serif; font-size: 12px !important; }
       .push-btn { background-color: #1a73e8; color: white; width: 100%; margin-top: 20px; transition: all 0.3s ease; padding: 12px; font-size: 1.1em; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; text-align: center; outline: none; flex-shrink: 0; }
       .push-btn:hover { background-color: #155cb8; }
       .push-btn.success-state { background-color: #28a745 !important; box-shadow: 0 0 12px rgba(40,167,69,0.4); }
@@ -43,20 +46,20 @@
   </head>
   <body>
     <div class="modal-container">
-      <header><span>📩 SendGrid & Trust Comm Generator</span></header>
+      <header><span>SendGrid &amp; Trust Comm Generator</span></header>
       <div class="main-content">
         <section class="form-pane">
           <label>Release Templates</label>
           <select id="releaseType" onchange="evaluateReleaseTypeContext()">
-            <option value="">🔄 Downloading templates config from sheet...</option>
+            <option value="">Downloading templates config from sheet...</option>
           </select>
-
+ 
           <label>Environment Context (Theme Color)</label>
           <select id="envTheme" onchange="updatePreview()">
             <option value="PROD">PROD (Veeva Blue Banner)</option>
             <option value="SBX">SBX (Sandbox Orange Banner)</option>
           </select>
-
+ 
           <label style="color: #4a5568;">Trust Type</label>
           <select id="statusCastType">
             <option value="Maintenance" selected>Maintenance</option>
@@ -64,53 +67,58 @@
             <option value="Performance Degradation">Performance Degradation</option>
             <option value="Informational">Informational</option>
           </select>
-
+ 
           <label>Email Title</label>
-          <span class="field-tooltip">💡 Used as the internal name for SendGrid Campaigns and StatusCast incidents.</span>
+          <span class="field-tooltip">Used as the internal name for SendGrid Campaigns and StatusCast incidents.</span>
           <input type="text" id="emailTitle" value="" oninput="updatePreview()">
-
+ 
           <label>Email Subject Line</label>
-          <span class="field-tooltip">💡 Title will automatically append the selected Release Version code suffix.</span>
+          <span class="field-tooltip">Title will automatically append the selected Release Version code suffix.</span>
           <input type="text" id="subjectLine" value="">
-
+ 
           <label>Release Version</label>
           <input type="text" id="releaseVersion" value="26R1.0.22" oninput="inputVersionOverride()">
-
-          <label>Select Target Date & Time</label>
-          <span class="field-tooltip">💡 Automatically calculates matching CEST/JST time strings to bind world clock anchors.</span>
+ 
+          <label>Select Target Date &amp; Time</label>
+          <span class="field-tooltip">Automatically calculates matching CEST/JST time strings to bind world clock anchors.</span>
           <input type="datetime-local" id="dateTime" oninput="formatFriendlyDate()">
-
+ 
           <label>Friendly Date Output</label>
           <input type="text" id="friendlyDate" value="Wednesday, April 29 at 10:00 am PDT" oninput="updatePreview()">
           <input type="hidden" id="isoStringValue" value="20260429T1000">
-
+ 
           <div id="downtimeInputWrapper" class="conditional-input-wrapper">
             <label>Estimated Vault Downtime</label>
             <input type="text" id="estimatedDowntime" value="90 Minutes" oninput="updatePreview()">
           </div>
-
+ 
+          <div id="staggeredWindowWrapper" class="conditional-input-wrapper" style="display: none;">
+            <label>Staggered Region Window Duration (Hours)</label>
+            <input type="number" id="staggeredWindowHours" value="2" min="0" max="12" oninput="updatePreview()">
+          </div>
+ 
           <label>Active PODs</label>
           <div class="filter-dashboard">
             <div class="master-row">
               <input type="checkbox" id="masterSelectAll" onchange="toggleMasterSelectAll(this)">
               <label for="masterSelectAll">Select All PODs</label>
             </div>
-            
+ 
             <div class="filter-section">
               <span>Filter By Region (Select Multiple):</span>
               <div id="regionButtonCluster" class="button-cluster"></div>
             </div>
-
+ 
             <div class="filter-section">
               <span>Filter By Release Types (Select Multiple):</span>
               <div id="releaseButtonCluster" class="button-cluster"></div>
             </div>
-
+ 
             <div class="filter-section">
               <span>Filter By Product (Select Multiple):</span>
               <div id="productButtonCluster" class="button-cluster"></div>
             </div>
-
+ 
             <div id="upgradeModeFilterSection" class="filter-section" style="display: none;">
               <span>Filter By Upgrade Mode (Select Multiple):</span>
               <div id="upgradeModeButtonCluster" class="button-cluster">
@@ -119,48 +127,48 @@
               </div>
             </div>
           </div>
-
+ 
           <label>Choose Individual PODs Checkbox Layout:</label>
           <div id="podChecklistContainer" class="loading-placeholder" style="max-height: 180px; overflow-y: auto; background: white; border: 1px solid #ccc; padding: 4px; border-radius: 4px; font-size: 0.9em; display: flex; flex-direction: column; gap: 2px;">
-            🔄 Loading database POD profiles from sheet...
+            Loading database POD profiles from sheet...
           </div>
-
+ 
           <label style="margin-top: 10px;">Final Output View (Affected PODs Layout Box)</label>
           <textarea id="affectedPods" rows="6" oninput="updatePreview()" placeholder="Your configurations will auto-compile here..."></textarea>
-
+ 
           <label style="margin-top: 10px; display:none;">Email Bottom Notes (Editable Layout)</label>
           <textarea id="emailNotes" rows="7" style="display:none;" oninput="updatePreview()"></textarea>
-
+ 
           <label>Release Notes URL</label>
           <input type="text" id="releaseNotes" value="https://vaulthelp.veeva.com" oninput="updatePreview()">
-
+ 
           <div class="checkbox-row-group">
             <input type="checkbox" id="confirmUrl">
             <label for="confirmUrl">I confirm this URL is active</label>
           </div>
-
+ 
           <button id="clearActionBtn" class="clear-btn" type="button" onclick="confirmClearForm()">Clear Form</button>
         </section>
-
+ 
         <section class="preview-pane">
           <div class="preview-label" style="font-size: 0.85em; font-weight: bold; color: #555; text-align: center; margin-bottom: 5px;">SendGrid Live Email Preview</div>
           <div id="dynamicTemplateViewport" class="email-body"></div>
-          
+ 
           <button id="submitActionBtn" class="push-btn" onclick="submitData('SendGrid')">Create SendGrid Draft</button>
           <button id="trustActionBtn" class="push-btn trust-btn" onclick="submitData('StatusCast')">Create Trust Draft</button>
         </section>
       </div>
     </div>
-
+ 
     <script>
       let globalIndividualPods = [];
-      let podMetadataMap = {}; 
+      let podMetadataMap = {};
       let activeRegions = [];
       let activeReleases = [];
       let activeProducts = [];
       let activeUpgradeModes = [];
       let globalTemplatesRegistry = [];
-
+ 
       window.addEventListener('DOMContentLoaded', function() {
         const now = new Date();
         const year = now.getFullYear();
@@ -168,44 +176,37 @@
         const day = String(now.getDate()).padStart(2, '0');
         const hours = String(now.getHours()).padStart(2, '0');
         const minutes = String(now.getMinutes()).padStart(2, '0');
-        
-        const localIsoString = `${year}-${month}-${day}T${hours}:${minutes}`;
+ 
+        const localIsoString = year + "-" + month + "-" + day + "T" + hours + ":" + minutes;
         const dateInput = document.getElementById('dateTime');
-        
         if (dateInput) {
           dateInput.value = localIsoString;
-          formatFriendlyDate(); 
+          formatFriendlyDate();
         }
-
+ 
         if (typeof google !== 'undefined' && google.script && google.script.run) {
           google.script.run
             .withSuccessHandler(populateDynamicTemplatesDropdown)
             .withFailureHandler(function(err) { alert("Config Load Failed: " + err.toString()); })
             .getSpreadsheetTemplatesConfig();
-
           google.script.run
             .withSuccessHandler(storeAndInitializeDashboard)
             .withFailureHandler(function(err) { alert("Pods Load Failed: " + err.toString()); })
             .fetchPodDataFromSheet();
         }
       });
-
+ 
       function populateDynamicTemplatesDropdown(response) {
         const selector = document.getElementById('releaseType');
         if (!selector) return;
-        
         if (!response) { alert("System Error: Empty response from spreadsheet server."); return; }
         if (response.status !== 'success') { alert("Spreadsheet Configuration Error:\n\n" + response.message); return; }
-        
         globalTemplatesRegistry = response.templates || [];
-        
-        selector.innerHTML = globalTemplatesRegistry.map(t => 
-          `<option value="${t.key}">${t.label}</option>`
-        ).join('');
-        
+        selector.innerHTML = globalTemplatesRegistry.map(t => "<option value=\"" + t.key + "\">" + t.label + "</option>").join('');
         evaluateReleaseTypeContext();
       }
-
+ 
+      // ─── EVALUATE RELEASE TYPE CONTEXT ───────────────────────────────────────
       function evaluateReleaseTypeContext() {
         const typeSelect = document.getElementById('releaseType');
         const upgradeSection = document.getElementById('upgradeModeFilterSection');
@@ -213,34 +214,23 @@
         const titleInput = document.getElementById('emailTitle');
         const notesField = document.getElementById('emailNotes');
         const urlInput = document.getElementById('releaseNotes');
-        
+ 
         if (!typeSelect || !globalTemplatesRegistry || globalTemplatesRegistry.length === 0) return;
         const currentKey = typeSelect.value;
-        
         const activeMatch = globalTemplatesRegistry.find(t => t.key === currentKey);
         if (!activeMatch) return;
-        
-        if (activeMatch.requiresDowntime === true) {
-          if (upgradeSection) upgradeSection.style.display = "flex";
-        } else {
-          if (upgradeSection) upgradeSection.style.display = "none";
-          activeUpgradeModes = [];
-          document.querySelectorAll('#upgradeModeButtonCluster .macro-filter-btn').forEach(btn => btn.classList.remove('active'));
-          let boxes = document.querySelectorAll('.pod-box');
-          boxes.forEach(cb => cb.checked = false);
-          updateMasterCheckboxState();
-          calculateMatrixSelections();
+ 
+        // 1. Populate title and subject FIRST before any branch logic runs
+        if (titleInput) {
+          titleInput.value = activeMatch.Default_Title || activeMatch.default_title || activeMatch.title || "";
         }
-
-       if (subjectInput) {
-          let rawSubject = activeMatch.subject || "REMINDER: Veeva [[VERSION]] Limited Release Notification - Downtime Required";
-          let currentVersionInput = document.getElementById('releaseVersion') ? document.getElementById('releaseVersion').value : "26R1.0.22";
-          let shortVersion = currentVersionInput.substring(0, 4);
+        if (subjectInput) {
+          let rawSubject = activeMatch.Default_Subject || activeMatch.default_subject || activeMatch.subject || "Veeva Vault Maintenance Release Notification";
+          let currentVersionValue = document.getElementById('releaseVersion') ? document.getElementById('releaseVersion').value : "26R1.0.22";
+          let shortVersion = currentVersionValue.substring(0, 4);
           subjectInput.value = rawSubject.replace(/\[\[VERSION\]\]/gi, shortVersion);
         }
-        if (titleInput) titleInput.value = activeMatch.title || "";
         if (notesField) notesField.value = activeMatch.rawNotes || "";
-
         if (urlInput) {
           let templateLink = activeMatch.notesUrl || activeMatch.releaseNotesLink;
           if (templateLink && templateLink.toLowerCase() !== "false") {
@@ -249,12 +239,41 @@
             urlInput.value = "https://vaulthelp.veeva.com";
           }
         }
-        
+ 
+        // 2. Staggered window
+        const staggeredWrapper = document.getElementById('staggeredWindowWrapper');
+        const staggeredInput = document.getElementById('staggeredWindowHours');
+        if (staggeredWrapper && staggeredInput) {
+          if (activeMatch.staggeredWindowHours && activeMatch.staggeredWindowHours > 0) {
+            staggeredWrapper.style.display = "block";
+            staggeredInput.value = activeMatch.staggeredWindowHours;
+          } else {
+            staggeredWrapper.style.display = "none";
+            staggeredInput.value = "0";
+          }
+        }
+ 
+        // 3. Downtime / upgrade mode branch
+        if (activeMatch.requiresDowntime === true) {
+          if (upgradeSection) upgradeSection.style.display = "flex";
+        } else {
+          if (upgradeSection) upgradeSection.style.display = "none";
+          activeUpgradeModes = [];
+          document.querySelectorAll('#upgradeModeButtonCluster .macro-filter-btn').forEach(btn => btn.classList.remove('active'));
+          let boxes = document.querySelectorAll('.pod-box');
+          if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
+            boxes.forEach(cb => { cb.checked = false; });
+            updateMasterCheckboxState();
+            // No return here — allow function to continue
+          }
+        }
+ 
+        // 4. Classic / VBV upgrade mode button state
         const classicBtn = document.getElementById('btn-UPGRADEMODE-Classic');
         const vbvBtn = document.getElementById('btn-UPGRADEMODE-VBV');
         const downtimeInput = document.getElementById('estimatedDowntime');
         const labelText = activeMatch.label ? String(activeMatch.label) : "";
-        
+ 
         if (classicBtn && vbvBtn) {
           classicBtn.disabled = false;
           vbvBtn.disabled = false;
@@ -262,15 +281,14 @@
           vbvBtn.style.opacity = "1";
           classicBtn.classList.remove('active');
           vbvBtn.classList.remove('active');
-
+ 
           if (/classic/i.test(labelText)) {
             activeUpgradeModes = ['Classic'];
             classicBtn.classList.add('active');
             vbvBtn.disabled = true;
             vbvBtn.style.opacity = "0.4";
             if (downtimeInput) downtimeInput.value = "Up to 4 Hours";
-          } 
-          else if (/vbv/i.test(labelText)) {
+          } else if (/vbv/i.test(labelText)) {
             activeUpgradeModes = ['VBV'];
             vbvBtn.classList.add('active');
             classicBtn.disabled = true;
@@ -279,140 +297,122 @@
           } else {
             activeUpgradeModes = [];
           }
-
+ 
           let boxes = document.querySelectorAll('.pod-box');
           boxes.forEach(cb => {
             let boxRegion = cb.getAttribute('data-region');
             let boxRelease = cb.getAttribute('data-release');
             let boxProduct = cb.getAttribute('data-product');
             let boxUpgradeMode = cb.getAttribute('data-upgrade-mode') ? cb.getAttribute('data-upgrade-mode').toLowerCase().trim() : "";
-            
-            let matchRegion = activeRegions.length === 0 ? (boxRegion === 'US') : activeRegions.includes(boxRegion);
-            let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
-            let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
-            let matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.some(mode => mode.toLowerCase().trim() === boxUpgradeMode);
-            
-            cb.checked = matchRegion && matchRelease && matchProduct && matchUpgradeMode;
+            if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
+              cb.checked = false;
+            } else {
+              let matchRegion = activeRegions.length === 0 || activeRegions.includes(boxRegion);
+              let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
+              let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
+              let matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.some(mode => mode.toLowerCase().trim() === boxUpgradeMode);
+              cb.checked = matchRegion && matchRelease && matchProduct && matchUpgradeMode;
+            }
           });
           updateMasterCheckboxState();
         }
-        
-        updatePreview();
+ 
+        calculateMatrixSelections();
       }
-
+ 
       function naturalSort(a, b) {
         return String(a).localeCompare(String(b), undefined, {numeric: true, sensitivity: 'base'});
       }
-
+ 
       function formatFriendlyDate() {
         const el = document.getElementById('dateTime');
         if (!el || !el.value) return;
         const input = el.value;
-        
         const tokens = input.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
         if (tokens) {
           const isoEl = document.getElementById('isoStringValue');
           if (isoEl) isoEl.value = tokens[1] + tokens[2] + tokens[3] + 'T' + tokens[4] + tokens[5];
         }
-
         const date = new Date(input);
         const options = { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' };
         const friendlyEl = document.getElementById('friendlyDate');
         if (friendlyEl) friendlyEl.value = date.toLocaleString('en-US', options).replace(',', '') + " PDT";
-        updatePreview();
+        calculateMatrixSelections();
       }
-// 🌟 UPDATED: Force handles live token swaps even if spreadsheet objects are caching
+ 
       function inputVersionOverride() {
         const typeSelect = document.getElementById('releaseType');
         const subjectInput = document.getElementById('subjectLine');
         const versionInput = document.getElementById('releaseVersion');
-        
         if (!subjectInput || !versionInput) return;
-        
-        let shortVersion = versionInput.value.substring(0, 4); // Grabs "50R3"
+        let shortVersion = versionInput.value.substring(0, 4);
         let rawSubject = "";
-
-        // Strategy A: Try to grab the pristine master template string from sheet memory
         if (typeSelect && globalTemplatesRegistry && globalTemplatesRegistry.length > 0) {
           const currentKey = typeSelect.value;
           const activeMatch = globalTemplatesRegistry.find(t => t.key === currentKey);
-          if (activeMatch && activeMatch.subject) {
-            rawSubject = activeMatch.subject;
+          if (activeMatch) {
+            rawSubject = activeMatch.Default_Subject || activeMatch.subject || "";
           }
         }
-        
-        // Strategy B Fallback: If memory is blank, look at what's currently printed on screen
-        if (!rawSubject) {
-          rawSubject = subjectInput.value;
-        }
-
-        // Run a deep replacement check
+        if (!rawSubject) rawSubject = subjectInput.value;
         if (rawSubject.includes("[[VERSION]]") || rawSubject.includes("[[version]]")) {
           subjectInput.value = rawSubject.replace(/\[\[VERSION\]\]/gi, shortVersion);
         } else {
-          // If the token was already converted, refresh it by finding where the old version code sits
           subjectInput.value = rawSubject.replace(/\b\d{2}R\d{1}\b/g, shortVersion);
         }
-        
         updatePreview();
       }
-
- function storeAndInitializeDashboard(response) {
+ 
+      function storeAndInitializeDashboard(response) {
         if (!response || response.status !== 'success') return;
         globalIndividualPods = response.individualPods || [];
-        podMetadataMap = response.podMetadata || {}; 
-
+        podMetadataMap = response.podMetadata || {};
         let cleanRegions = (response.uniqueRegions || []).filter(region => region !== 'NA');
         buildFilterButtons('regionButtonCluster', cleanRegions, 'REGION');
         buildFilterButtons('releaseButtonCluster', response.uniqueReleases || [], 'RELEASE');
-        buildFilterButtons('productButtonCluster', response.uniqueProducts || [], 'PRODUCT'); // Clean and automated!
+        buildFilterButtons('productButtonCluster', response.uniqueProducts || [], 'PRODUCT');
         renderChecklistOptions();
       }
-
+ 
       function buildFilterButtons(containerId, items, macroType) {
         const cluster = document.getElementById(containerId);
         if (!cluster) return;
-        cluster.innerHTML = items.map(item => 
-          `<button type="button" id="btn-${macroType}-${item}" class="macro-filter-btn" onclick="executeMacroSelection('${macroType}', '${item}')">+ ${item}</button>`
+        cluster.innerHTML = items.map(item =>
+          "<button type=\"button\" id=\"btn-" + macroType + "-" + item + "\" class=\"macro-filter-btn\" onclick=\"executeMacroSelection('" + macroType + "', '" + item + "')\">+ " + item + "</button>"
         ).join('');
       }
-
+ 
       function renderChecklistOptions() {
         const container = document.getElementById('podChecklistContainer');
         if (!container) return;
         container.classList.remove('loading-placeholder');
         container.innerHTML = globalIndividualPods.map(p => {
           let meta = podMetadataMap[p] || { region: 'Unknown', release: 'Unknown', product: 'Unknown', upgradeMode: 'Unknown' };
-          let inputId = `chk-${p}`;
-          return `
-            <div class="pod-row-item">
-              <input type="checkbox" id="${inputId}" class="pod-box" value="${p}" data-region="${meta.region}" data-release="${meta.release}" data-product="${meta.product}" data-upgrade-mode="${meta.upgradeMode}" onchange="calculateMatrixSelections()">
-              <label for="${inputId}">${p}</label>
-            </div>
-          `;
+          let inputId = "chk-" + p;
+          return "<div class=\"pod-row-item\"><input type=\"checkbox\" id=\"" + inputId + "\" class=\"pod-box\" value=\"" + p + "\" data-region=\"" + meta.region + "\" data-release=\"" + meta.release + "\" data-product=\"" + meta.product + "\" data-upgrade-mode=\"" + meta.upgradeMode + "\" onchange=\"calculateMatrixSelections(); updatePreview();\"><label for=\"" + inputId + "\">" + p + "</label></div>";
         }).join('');
-        updatePreview();
+        calculateMatrixSelections();
       }
-
+ 
       function toggleMasterSelectAll(masterCheckbox) {
         let boxes = document.querySelectorAll('.pod-box');
         boxes.forEach(cb => cb.checked = masterCheckbox.checked);
         calculateMatrixSelections();
       }
-
+ 
       function executeMacroSelection(filterType, attributeValue) {
         if (filterType === 'REGION') {
           let index = activeRegions.indexOf(attributeValue);
-          if (index !== -1) { activeRegions.splice(index, 1); document.getElementById(`btn-REGION-${attributeValue}`).classList.remove('active'); }
-          else { activeRegions.push(attributeValue); document.getElementById(`btn-REGION-${attributeValue}`).classList.add('active'); }
+          if (index !== -1) { activeRegions.splice(index, 1); document.getElementById("btn-REGION-" + attributeValue).classList.remove('active'); }
+          else { activeRegions.push(attributeValue); document.getElementById("btn-REGION-" + attributeValue).classList.add('active'); }
         } else if (filterType === 'RELEASE') {
           let index = activeReleases.indexOf(attributeValue);
-          if (index !== -1) { activeReleases.splice(index, 1); document.getElementById(`btn-RELEASE-${attributeValue}`).classList.remove('active'); }
-          else { activeReleases.push(attributeValue); document.getElementById(`btn-RELEASE-${attributeValue}`).classList.add('active'); }
+          if (index !== -1) { activeReleases.splice(index, 1); document.getElementById("btn-RELEASE-" + attributeValue).classList.remove('active'); }
+          else { activeReleases.push(attributeValue); document.getElementById("btn-RELEASE-" + attributeValue).classList.add('active'); }
         } else if (filterType === 'PRODUCT') {
           let index = activeProducts.indexOf(attributeValue);
-          if (index !== -1) { activeProducts.splice(index, 1); document.getElementById(`btn-PRODUCT-${attributeValue}`).classList.remove('active'); }
-          else { activeProducts.push(attributeValue); document.getElementById(`btn-PRODUCT-${attributeValue}`).classList.add('active'); }
+          if (index !== -1) { activeProducts.splice(index, 1); document.getElementById("btn-PRODUCT-" + attributeValue).classList.remove('active'); }
+          else { activeProducts.push(attributeValue); document.getElementById("btn-PRODUCT-" + attributeValue).classList.add('active'); }
         } else if (filterType === 'UPGRADEMODE') {
           if (attributeValue === 'Classic') {
             let vbvIdx = activeUpgradeModes.indexOf('VBV');
@@ -425,53 +425,49 @@
             const classicBtn = document.getElementById('btn-UPGRADEMODE-Classic');
             if (classicBtn) classicBtn.classList.remove('active');
           }
-
           let index = activeUpgradeModes.indexOf(attributeValue);
-          if (index !== -1) { 
-            activeUpgradeModes.splice(index, 1); 
-            document.getElementById(`btn-UPGRADEMODE-${attributeValue}`).classList.remove('active'); 
-          } else { 
-            activeUpgradeModes.push(attributeValue); 
-            document.getElementById(`btn-UPGRADEMODE-${attributeValue}`).classList.add('active'); 
+          if (index !== -1) {
+            activeUpgradeModes.splice(index, 1);
+            document.getElementById("btn-UPGRADEMODE-" + attributeValue).classList.remove('active');
+          } else {
+            activeUpgradeModes.push(attributeValue);
+            document.getElementById("btn-UPGRADEMODE-" + attributeValue).classList.add('active');
           }
         }
-        
+ 
         if (filterType === 'UPGRADEMODE' && activeUpgradeModes.includes(attributeValue)) {
           const downtimeInput = document.getElementById('estimatedDowntime');
           if (downtimeInput) {
-            if (attributeValue === 'Classic') { downtimeInput.value = "Up to 4 Hours"; } 
+            if (attributeValue === 'Classic') { downtimeInput.value = "Up to 4 Hours"; }
             else if (attributeValue === 'VBV') { downtimeInput.value = "10 Minutes"; }
           }
         }
-
+ 
         let boxes = document.querySelectorAll('.pod-box');
         if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
-          boxes.forEach(cb => {
-            let boxRegion = cb.getAttribute('data-region');
-            cb.checked = (boxRegion === 'US');
-          });
+          boxes.forEach(cb => { cb.checked = false; });
           updateMasterCheckboxState();
           calculateMatrixSelections();
           return;
         }
-        
+ 
         boxes.forEach(cb => {
           let boxRegion = cb.getAttribute('data-region');
           let boxRelease = cb.getAttribute('data-release');
           let boxProduct = cb.getAttribute('data-product');
           let boxUpgradeMode = cb.getAttribute('data-upgrade-mode') ? cb.getAttribute('data-upgrade-mode').toLowerCase().trim() : "";
-          
-          let matchRegion = activeRegions.length === 0 ? (boxRegion === 'US') : activeRegions.includes(boxRegion);
+          let currentTemplateKey = document.getElementById('releaseType') ? document.getElementById('releaseType').value : "";
+          let isMaintenance = currentTemplateKey.toLowerCase().includes("maintenance");
+          let matchRegion = activeRegions.length === 0 || activeRegions.includes(boxRegion);
           let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
           let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
-          let matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.some(mode => mode.toLowerCase().trim() === boxUpgradeMode);
-          
+          let matchUpgradeMode = isMaintenance || activeUpgradeModes.length === 0 || activeUpgradeModes.some(mode => mode.toLowerCase().trim() === boxUpgradeMode);
           cb.checked = matchRegion && matchRelease && matchProduct && matchUpgradeMode;
         });
         updateMasterCheckboxState();
-        calculateMatrixSelections(); 
+        calculateMatrixSelections();
       }
-
+ 
       function updateMasterCheckboxState() {
         let totalBoxes = document.querySelectorAll('.pod-box').length;
         let checkedBoxes = document.querySelectorAll('.pod-box:checked').length;
@@ -481,79 +477,194 @@
           master.indeterminate = (checkedBoxes > 0 && checkedBoxes < totalBoxes);
         }
       }
-
+ 
       function calculateMatrixSelections() {
         const textArea = document.getElementById('affectedPods');
         if (!textArea) return;
-        
+ 
         let checkedBoxes = [...document.querySelectorAll('.pod-box:checked')];
         updateMasterCheckboxState();
-        
+ 
         if (checkedBoxes.length === 0) { textArea.value = ""; updatePreview(); return; }
-
+ 
         let regionalNestedMap = {};
         checkedBoxes.forEach(cb => {
           let podName = cb.value;
           let region = cb.getAttribute('data-region') || 'Unknown';
           let release = cb.getAttribute('data-release') || 'Release';
           if (!regionalNestedMap[region]) regionalNestedMap[region] = {};
-          if (!regionalNestedMap[region][release]) regionalNestedMap[region][release] = [];
-          regionalNestedMap[region][release].push(podName);
+          if (!regionalNestedMap[region][release]) regionalNestedMap[region][release] = {};
+          if (!regionalNestedMap[region][release].pods) regionalNestedMap[region][release].pods = [];
+          regionalNestedMap[region][release].pods.push(podName);
         });
-
+ 
+        const rawDate = getSafeValue('dateTime', '');
+        const staggeredHours = getSafeValue('staggeredWindowHours', '0');
+ 
+        let ptStaggeredText = "";
+        let apacPtLink = "";
+        let jstStaggeredText = "";
+        let euPtLink = "";
+        let cestStaggeredText = "";
+ 
+        if (rawDate && Number(staggeredHours) > 0) {
+          const parts = rawDate.split(/[-T:]/);
+          if (parts.length >= 5) {
+            const yr = parseInt(parts[0], 10);
+            const mo = parseInt(parts[1], 10) - 1;
+            const dy = parseInt(parts[2], 10);
+            const hr = parseInt(parts[3], 10);
+            const mn = parseInt(parts[4], 10);
+ 
+            let baseDate = new Date(Date.UTC(yr, mo, dy, hr, mn));
+            let endDate = new Date(baseDate.getTime() + (Number(staggeredHours) * 60 * 60 * 1000));
+ 
+            function cleanTimeStr(dateObj, timeZone) {
+              let opts = { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: timeZone };
+              let partsArr = new Intl.DateTimeFormat('en-US', opts).formatToParts(dateObj);
+              let hVal = partsArr.find(p => p.type === 'hour').value;
+              let mVal = partsArr.find(p => p.type === 'minute').value;
+              let dayPeriod = partsArr.find(p => p.type === 'dayPeriod').value.toLowerCase();
+              if (mVal === "00") {
+                if (hVal === "12" && dayPeriod === "pm") return "noon";
+                if (hVal === "12" && dayPeriod === "am") return "midnight";
+              }
+              return hVal + ":" + mVal + " " + dayPeriod;
+            }
+ 
+            const baseDayUS = new Intl.DateTimeFormat('en-US', { day: 'numeric', weekday: 'long', month: 'long', timeZone: 'America/Los_Angeles' }).format(baseDate);
+            const baseDayEU = new Intl.DateTimeFormat('en-US', { day: 'numeric', weekday: 'long', month: 'long', timeZone: 'Europe/Paris' }).format(baseDate);
+            const baseDayJST = new Intl.DateTimeFormat('en-US', { day: 'numeric', weekday: 'long', month: 'long', timeZone: 'America/Los_Angeles' }).format(baseDate);
+            const endDayJST = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone: 'Asia/Tokyo' }).format(endDate);
+            let jstDayContext = baseDayJST;
+            if (baseDayJST.split(' ').pop() !== endDayJST) { jstDayContext = baseDayJST + " into Friday"; }
+ 
+            let worldClockUrl = "https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&iso=" + rawDate.replace(/[-:]/g, "") + "&sort=1";
+ 
+            ptStaggeredText = " <a href=\"" + worldClockUrl + "\" clicktracking=\"off\" target=\"_blank\" style=\"color: #007bff; text-decoration: none;\">US between " + cleanTimeStr(baseDate, 'America/Los_Angeles') + " and " + cleanTimeStr(endDate, 'America/Los_Angeles') + " PDT</a> (" + baseDayUS + ")";
+            apacPtLink = " <a href=\"" + worldClockUrl + "\" clicktracking=\"off\" target=\"_blank\" style=\"color: #007bff; text-decoration: none;\">APAC between " + cleanTimeStr(baseDate, 'America/Los_Angeles') + " and " + cleanTimeStr(endDate, 'America/Los_Angeles') + " PDT</a>";
+            jstStaggeredText = " (" + jstDayContext + " between " + cleanTimeStr(baseDate, 'Asia/Tokyo') + " and " + cleanTimeStr(endDate, 'Asia/Tokyo') + " JST)";
+            euPtLink = " <a href=\"" + worldClockUrl + "\" clicktracking=\"off\" target=\"_blank\" style=\"color: #007bff; text-decoration: none;\">EU between " + cleanTimeStr(baseDate, 'America/Los_Angeles') + " and " + cleanTimeStr(endDate, 'America/Los_Angeles') + " PDT</a>";
+            cestStaggeredText = " (" + baseDayEU + " between " + cleanTimeStr(baseDate, 'Europe/Paris') + " and " + cleanTimeStr(endDate, 'Europe/Paris') + " CEST)";
+          }
+        }
+ 
+        let activeProductFilters = [];
+        if (document.getElementById('btn-PRODUCT-Vault') && document.getElementById('btn-PRODUCT-Vault').classList.contains('active')) activeProductFilters.push('Vault');
+        if (document.getElementById('btn-PRODUCT-LIMS') && document.getElementById('btn-PRODUCT-LIMS').classList.contains('active')) activeProductFilters.push('LIMS');
+        if (document.getElementById('btn-PRODUCT-RegOne') && document.getElementById('btn-PRODUCT-RegOne').classList.contains('active')) activeProductFilters.push('RegOne');
+        if (document.getElementById('btn-PRODUCT-Safety') && document.getElementById('btn-PRODUCT-Safety').classList.contains('active')) activeProductFilters.push('Safety');
+        if (activeProductFilters.length === 0) activeProductFilters.push('Vault');
+ 
         const targetRegionOrder = ["US", "EU", "APAC"];
         let compiledLines = [];
-
-        function buildOutputLinesForRegion(regKey) {
-          if (!regionalNestedMap[regKey]) return;
-          let releaseTypes = Object.keys(regionalNestedMap[regKey]).sort();
-          releaseTypes.forEach(releaseTypeTag => {
-            let sortedPodNames = regionalNestedMap[regKey][releaseTypeTag].sort(naturalSort);
-            let cleanTag = releaseTypeTag.toLowerCase().includes("release") ? releaseTypeTag : `${releaseTypeTag} Release`;
-            compiledLines.push(`<u>${regKey} ${cleanTag}:</u> ${sortedPodNames.join(', ')}`);
+        let currentTemplateKey = document.getElementById('releaseType') ? document.getElementById('releaseType').value : "";
+        let isMaintenanceTemplate = currentTemplateKey.toLowerCase().includes("maintenance");
+ 
+        if (isMaintenanceTemplate) {
+          targetRegionOrder.forEach(regKey => {
+            if (!regionalNestedMap[regKey]) return;
+            let releaseTypes = Object.keys(regionalNestedMap[regKey]).sort();
+            releaseTypes.forEach(releaseTypeTag => {
+              let sortedPodNames = regionalNestedMap[regKey][releaseTypeTag].pods.sort(naturalSort);
+              let displayReleaseTag = releaseTypeTag;
+              if (!displayReleaseTag.toLowerCase().includes("release")) { displayReleaseTag = displayReleaseTag + " Release"; }
+              compiledLines.push("<u>" + regKey + " " + displayReleaseTag + ":</u> " + sortedPodNames.join(', '));
+            });
           });
+          Object.keys(regionalNestedMap).forEach(regKey => {
+            if (!targetRegionOrder.includes(regKey)) {
+              let releaseTypes = Object.keys(regionalNestedMap[regKey]).sort();
+              releaseTypes.forEach(releaseTypeTag => {
+                let sortedPodNames = regionalNestedMap[regKey][releaseTypeTag].pods.sort(naturalSort);
+                let displayReleaseTag = releaseTypeTag;
+                if (!displayReleaseTag.toLowerCase().includes("release")) { displayReleaseTag = displayReleaseTag + " Release"; }
+                compiledLines.push("<u>" + regKey + " " + displayReleaseTag + ":</u> " + sortedPodNames.join(', '));
+              });
+            }
+          });
+        } else {
+          let productBlocks = [];
+          activeProductFilters.forEach(singleProduct => {
+            let currentProductLines = [];
+            let displayLabel = "Veeva " + singleProduct;
+            if (singleProduct === 'RegOne') displayLabel = "Veeva RegulatoryOne";
+ 
+            targetRegionOrder.forEach(regKey => {
+              if (!regionalNestedMap[regKey]) return;
+              let releaseTypes = Object.keys(regionalNestedMap[regKey]).sort();
+              releaseTypes.forEach(releaseTypeTag => {
+                let finalTimeContext = "";
+                let realProductPods = [];
+                let checkedBoxes2 = [...document.querySelectorAll('.pod-box:checked')];
+                checkedBoxes2.forEach(cb => {
+                  let boxRegion = cb.getAttribute('data-region');
+                  let boxRelease = cb.getAttribute('data-release');
+                  let boxProduct = cb.getAttribute('data-product') || 'Vault';
+                  if (boxRegion === regKey && boxRelease === releaseTypeTag && boxProduct.toLowerCase() === singleProduct.toLowerCase()) {
+                    if (!realProductPods.includes(cb.value)) { realProductPods.push(cb.value); }
+                  }
+                });
+                if (realProductPods.length > 0) {
+                  let sortedProductPods = realProductPods.sort(naturalSort);
+                  if (staggeredHours && Number(staggeredHours) > 0) {
+                    if (regKey === "US") finalTimeContext = ptStaggeredText;
+                    if (regKey === "APAC") finalTimeContext = apacPtLink + jstStaggeredText;
+                    if (regKey === "EU") finalTimeContext = euPtLink + cestStaggeredText;
+                    currentProductLines.push("<u>" + displayLabel + "</u> " + finalTimeContext + ": " + sortedProductPods.join(', '));
+                  } else {
+                    currentProductLines.push("<u>" + displayLabel + " " + regKey + ":</u> " + sortedProductPods.join(', '));
+                  }
+                }
+              });
+            });
+            if (currentProductLines.length > 0) { productBlocks.push(currentProductLines.join('\n\n')); }
+          });
+          let horizontalRuleSeparator = '\n<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 4px; margin-bottom: 4px;"/>\n';
+          compiledLines.push(productBlocks.join(horizontalRuleSeparator));
         }
-
-        targetRegionOrder.forEach(regKey => { buildOutputLinesForRegion(regKey); });
-        Object.keys(regionalNestedMap).forEach(regKey => { if (!targetRegionOrder.includes(regKey)) { buildOutputLinesForRegion(regKey); } });
-
-        textArea.value = compiledLines.join('\n\n');
-        updatePreview(); 
+ 
+        if (isMaintenanceTemplate) {
+          textArea.value = compiledLines.join('\n');
+        } else {
+          textArea.value = compiledLines[0] || "";
+        }
+        updatePreview();
       }
-
-      function getSafeValue(id, fallback) { const el = document.getElementById(id); return el ? el.value : fallback; }
-      
+ 
+      function getSafeValue(id, fallback) {
+        const el = document.getElementById(id);
+        return el ? el.value : fallback;
+      }
+ 
       function updatePreview() {
         try {
           const viewport = document.getElementById('dynamicTemplateViewport');
           if (!viewport) return;
-
           const releaseTypeValue = getSafeValue('releaseType', '');
           if (!releaseTypeValue || !globalTemplatesRegistry || globalTemplatesRegistry.length === 0) {
             viewport.innerHTML = "<div style='padding:20px; color:#666;'>Awaiting data initialization config...</div>";
             return;
           }
-
           const activeMatch = globalTemplatesRegistry.find(t => t.key === releaseTypeValue);
           let targetTemplateString = String(releaseTypeValue || "") + " " + (activeMatch && activeMatch.label ? String(activeMatch.label) : "");
           let isUpgradeTemplate = /classic|vbv|general|limited|release/i.test(targetTemplateString) && !/maintenance/i.test(targetTemplateString);
           let isDowntimeRequired = isUpgradeTemplate ? true : (activeMatch ? activeMatch.requiresDowntime : false);
-
+ 
           const downtimeWrapper = document.getElementById('downtimeInputWrapper');
-          if (downtimeWrapper) {
-            downtimeWrapper.style.display = isDowntimeRequired ? "block" : "none";
-          }
-
+          if (downtimeWrapper) { downtimeWrapper.style.display = isDowntimeRequired ? "block" : "none"; }
+ 
           const formDataPayload = {
             envTheme: getSafeValue('envTheme', 'PROD'),
             version: getSafeValue('releaseVersion', '26R1.0.22'),
             friendlyDate: getSafeValue('friendlyDate', 'Wednesday, April 29 at 10:00 am PDT'),
-            targetDateIso: getSafeValue('isoStringValue', '20260429T1000'), 
+            targetDateIso: getSafeValue('isoStringValue', '20260429T1000'),
             isoString: getSafeValue('isoStringValue', '20260429T1000'),
             rawDateValue: getSafeValue('dateTime', ''),
-            templateKey: releaseTypeValue, 
+            templateKey: releaseTypeValue,
             requiresDowntime: isDowntimeRequired,
             estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes'),
+            staggeredWindowHours: getSafeValue('staggeredWindowHours', '0'),
             emailTitle: getSafeValue('emailTitle', ''),
             notesUrl: getSafeValue('releaseNotes', 'https://vaulthelp.veeva.com'),
             customNotesText: getSafeValue('emailNotes', ''),
@@ -561,44 +672,51 @@
             htmlUpper: activeMatch ? activeMatch.htmlUpper : "",
             htmlLower: activeMatch ? activeMatch.htmlLower : ""
           };
-
+ 
           if (typeof google !== 'undefined' && google.script && google.script.run) {
             google.script.run
               .withSuccessHandler(function(generatedHtmlMarkup) {
-                 viewport.innerHTML = generatedHtmlMarkup;
+                viewport.innerHTML = generatedHtmlMarkup;
               })
               .generateMasterHtmlLayout(formDataPayload);
           }
-
         } catch (e) { console.error(e); }
       }
-
-      function confirmClearForm() { const verified = confirm("Are you sure you want to clear this form? All custom changes will be lost."); if (verified) { executeFormReset(); } }
-
+ 
+      function confirmClearForm() {
+        const verified = confirm("Are you sure you want to clear this form? All custom changes will be lost.");
+        if (verified) { executeFormReset(); }
+      }
+ 
       function executeFormReset() {
         if (globalTemplatesRegistry && globalTemplatesRegistry.length > 0) { document.getElementById('releaseType').value = globalTemplatesRegistry[0].key; }
         document.getElementById('envTheme').value = "PROD";
         document.getElementById('statusCastType').value = "Maintenance";
         document.getElementById('releaseVersion').value = "26R1.0.22";
         document.getElementById('estimatedDowntime').value = "90 Minutes";
+        document.getElementById('staggeredWindowHours').value = "0";
         document.getElementById('releaseNotes').value = "https://vaulthelp.veeva.com";
         const now = new Date();
-        document.getElementById('dateTime').value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T10:00`;
+        document.getElementById('dateTime').value = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, '0') + "-" + String(now.getDate()).padStart(2, '0') + "T10:00";
         activeRegions = []; activeReleases = []; activeProducts = []; activeUpgradeModes = [];
         document.querySelectorAll('.macro-filter-btn').forEach(btn => btn.classList.remove('active'));
-        const masterCheck = document.getElementById('masterSelectAll'); if (masterCheck) { masterCheck.checked = false; masterCheck.indeterminate = false; }
+        const masterCheck = document.getElementById('masterSelectAll');
+        if (masterCheck) { masterCheck.checked = false; masterCheck.indeterminate = false; }
         document.querySelectorAll('.pod-box').forEach(cb => cb.checked = false);
-        document.getElementById('affectedPods').value = ""; document.getElementById('confirmUrl').checked = false;
-        evaluateReleaseTypeContext(); formatFriendlyDate();
+        document.getElementById('affectedPods').value = "";
+        document.getElementById('confirmUrl').checked = false;
+        evaluateReleaseTypeContext();
+        formatFriendlyDate();
       }
-
+ 
       function submitData(targetPlatform) {
-        const confirmEl = document.getElementById('confirmUrl'); if (confirmEl && !confirmEl.checked) { alert("Confirm active URL parameter."); return; }
+        const confirmEl = document.getElementById('confirmUrl');
+        if (confirmEl && !confirmEl.checked) { alert("Confirm active URL parameter."); return; }
         const releaseTypeValue = getSafeValue('releaseType', 'maintenance');
         const activeMatch = globalTemplatesRegistry.find(t => t.key === releaseTypeValue);
-        
+ 
         const formDataPayload = {
-          envTheme: getSafeValue('envTheme', 'PROD'), 
+          envTheme: getSafeValue('envTheme', 'PROD'),
           releaseType: releaseTypeValue,
           requiresDowntime: activeMatch ? activeMatch.requiresDowntime : false,
           statusCastType: getSafeValue('statusCastType', 'Maintenance'),
@@ -606,41 +724,42 @@
           subjectLine: getSafeValue('subjectLine', ''),
           version: getSafeValue('releaseVersion', ''),
           friendlyDate: getSafeValue('friendlyDate', ''),
-          targetDateIso: getSafeValue('isoStringValue', ''), 
+          targetDateIso: getSafeValue('isoStringValue', ''),
           isoString: getSafeValue('isoStringValue', ''),
           rawDateValue: getSafeValue('dateTime', ''),
-          affectedPods: getSafeValue('affectedPods', '').replace(/\n/g, '<br/>'),
+          affectedPods: getSafeValue('affectedPods', ''),
           notesUrl: getSafeValue('releaseNotes', ''),
           customNotesText: getSafeValue('emailNotes', ''),
           estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes'),
+          staggeredWindowHours: getSafeValue('staggeredWindowHours', '0'),
           htmlUpper: activeMatch ? activeMatch.htmlUpper : "",
           htmlLower: activeMatch ? activeMatch.htmlLower : ""
         };
-
+ 
         if (targetPlatform === 'SendGrid') {
           const btn = document.getElementById('submitActionBtn');
-          if (btn) { btn.innerText = "⏳ Processing Request..."; btn.disabled = true; }
+          if (btn) { btn.innerText = "Processing Request..."; btn.disabled = true; }
           google.script.run
             .withSuccessHandler(function(res) {
               if (res && res.status === 'error') {
                 alert("API Rejection:\n\n" + res.message);
                 if (btn) { btn.innerText = "Create SendGrid Draft"; btn.disabled = false; }
               } else {
-                if (btn) { btn.classList.add('success-state'); btn.innerText = "✓ SendGrid Draft Created!"; btn.disabled = false; setTimeout(() => { btn.classList.remove('success-state'); btn.innerText = "Create SendGrid Draft"; }, 3500); }
+                if (btn) { btn.classList.add('success-state'); btn.innerText = "SendGrid Draft Created!"; btn.disabled = false; setTimeout(function() { btn.classList.remove('success-state'); btn.innerText = "Create SendGrid Draft"; }, 3500); }
               }
             })
             .withFailureHandler(function(err) { alert("SendGrid Network Error: " + err.toString()); if (btn) { btn.innerText = "Create SendGrid Draft"; btn.disabled = false; } })
             .processPushRequest(formDataPayload);
         } else {
           const btn = document.getElementById('trustActionBtn');
-          if (btn) { btn.innerText = "⏳ Pushing to StatusCast..."; btn.disabled = true; }
+          if (btn) { btn.innerText = "Pushing to StatusCast..."; btn.disabled = true; }
           google.script.run
             .withSuccessHandler(function(res) {
               if (res && res.status === 'error') {
                 alert("API Rejection:\n\n" + res.message);
                 if (btn) { btn.innerText = "Create Trust Draft"; btn.disabled = false; }
               } else {
-                if (btn) { btn.classList.add('success-state'); btn.innerText = "✓ StatusCast Draft Created!"; btn.disabled = false; setTimeout(() => { btn.classList.remove('success-state'); btn.innerText = "Create Trust Draft"; }, 3500); }
+                if (btn) { btn.classList.add('success-state'); btn.innerText = "StatusCast Draft Created!"; btn.disabled = false; setTimeout(function() { btn.classList.remove('success-state'); btn.innerText = "Create Trust Draft"; }, 3500); }
               }
             })
             .withFailureHandler(function(err) { alert("StatusCast Network Error: " + err.toString()); if (btn) { btn.innerText = "Create Trust Draft"; btn.disabled = false; } })
@@ -650,3 +769,10 @@
     </script>
   </body>
 </html>
+ 
+
+
+
+
+
+
