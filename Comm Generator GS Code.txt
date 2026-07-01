@@ -22,7 +22,7 @@ function doGet() {
  */
 function onOpen() {
   SpreadsheetApp.getUi()
-    .createMenu('📩 Comm Generator')
+    .createMenu('陶 Comm Generator')
     .addItem('Launch Dashboard Modal', 'launchGeneratorDashboardModal')
     .addToUi();
 }
@@ -79,9 +79,9 @@ function fetchPodDataFromSheet() {
       let upgVal = row[idxUpgrade] ? String(row[idxUpgrade]).trim() : "";
       let trustVal = row[idxTrustId] ? String(row[idxTrustId]).trim() : "";
 
-      // 🌟 EXCLUSION GUARD: Completely drop Vault Basics and LIMS Basics data lines at the data source level
+      // EXCLUSION GUARD: Completely drop Vault Basics and LIMS Basics data lines at the data source level
       if (prodVal === 'Vault Basics' || prodVal === 'LIMS Basics') {
-        continue; 
+        continue;
       }
 
       if (relVal.includes("/") || relVal.includes("-") || !isNaN(relVal.charAt(0))) {
@@ -90,11 +90,12 @@ function fetchPodDataFromSheet() {
 
       individualPods.push(podName);
       
-      podMetadata[podName] = {
+   podMetadata[podName] = {
         region: regVal || "Unknown",
         release: relVal || "General",
         product: prodVal || "Vault",
-        upgradeMode: upgVal || "Classic",
+        // FOR UPGRADES: Setting this to "None" prevents null cells from being swept into "+ Classic" or "+ VBV"
+        upgradeMode: upgVal || "None",
         trustId: trustVal
       };
 
@@ -104,7 +105,6 @@ function fetchPodDataFromSheet() {
     }
 
     individualPods.sort((a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'}));
-
     return {
       status: 'success',
       individualPods: individualPods,
@@ -113,7 +113,6 @@ function fetchPodDataFromSheet() {
       uniqueReleases: Array.from(releasesSet).sort(),
       uniqueProducts: Array.from(productsSet).sort()
     };
-
   } catch (err) {
     return { status: 'error', message: err.toString() };
   }
@@ -139,18 +138,18 @@ function getSpreadsheetTemplatesConfig() {
       return { status: 'error', message: "The template configuration database is completely empty." };
     }
 
-    // 🌟 Explicit index coordinates mapping Columns G, H, and I flawlessly
-    const idxKey = 0;       // Column A
-    const idxLabel = 1;     // Column B
-    const idxSubject = 2;   // Column C
-    const idxTitle = 3;     // Column D
-    const idxUpper = 5;     // Column F
-    const idxLower = 6;     // Column G (Email_Body_Lower)
-    const idxDowntime = 7;  // Column H (Requires_Downtime)
-    const idxNotesUrl = 8;  // Column I (Release_Notes_URL)
+    // Explicit index coordinates mapping Columns G, H, I, and J flawlessly
+    const idxKey = 0;         // Column A
+    const idxLabel = 1;       // Column B
+    const idxSubject = 2;     // Column C
+    const idxTitle = 3;       // Column D
+    const idxUpper = 5;       // Column F
+    const idxLower = 6;       // Column G (Email_Body_Lower)
+    const idxDowntime = 7;    // Column H (Requires_Downtime)
+    const idxNotesUrl = 8;    // Column I (Release_Notes_URL)
+    const idxStaggered = 9;   // Column J (Staggered_Window_Hours)
 
     let templatesRegistry = [];
-
     for (let i = 1; i < data.length; i++) {
       let row = data[i];
       let key = String(row[idxKey]).trim();
@@ -159,7 +158,7 @@ function getSpreadsheetTemplatesConfig() {
       // Read Column H for structural downtime evaluation rules
       let rawDowntime = row[idxDowntime] ? String(row[idxDowntime]).toLowerCase().trim() : "";
       let isDowntimeTrue = (rawDowntime === "true" || rawDowntime === "yes" || rawDowntime === "1");
-
+      
       // Read Column I for explicit custom template URLs safely
       let sheetUrlValue = row[idxNotesUrl] ? String(row[idxNotesUrl]).trim() : "";
       let cleanUrl = sheetUrlValue; 
@@ -168,21 +167,28 @@ function getSpreadsheetTemplatesConfig() {
         cleanUrl = "https://vaulthelp.veeva.com";
       }
 
-      templatesRegistry.push({
+      let staggeredHours = row[idxStaggered] ? Number(row[idxStaggered]) : 0;
+
+     templatesRegistry.push({
         key: key,
         label: (row[idxLabel] ? String(row[idxLabel]).trim() : "") || key,
+        
+        Default_Subject: row[idxSubject] ? String(row[idxSubject]).trim() : "",
         subject: row[idxSubject] ? String(row[idxSubject]).trim() : "",
+        
+        Default_Title: row[idxTitle] ? String(row[idxTitle]).trim() : "",
         title: row[idxTitle] ? String(row[idxTitle]).trim() : "",
+        
         requiresDowntime: isDowntimeTrue,
         htmlUpper: row[idxUpper] ? String(row[idxUpper]) : "",
         htmlLower: row[idxLower] ? String(row[idxLower]) : "",
         notesUrl: cleanUrl,          
-        releaseNotesLink: cleanUrl 
+        releaseNotesLink: cleanUrl,
+        staggeredWindowHours: isNaN(staggeredHours) ? 0 : staggeredHours
       });
     }
 
     return { status: 'success', templates: templatesRegistry };
-
   } catch (e) {
     return { status: 'error', message: e.toString() };
   }
@@ -192,8 +198,15 @@ function getSpreadsheetTemplatesConfig() {
  * Dynamic Timezone Calculator Helper
  * Converts a Pacific input string (America/Los_Angeles) into correct local PDT/PST, CEST/CET, and JST.
  */
-function calculateTimezones(rawDateValue) {
+function calculateTimezones(rawDateValue, staggeredHours) {
   if (!rawDateValue) return null;
+  
+  // SAFE GUARD: Avoid argument parameter calculation breakdowns if parameter is passed as undefined/omitted
+  if (staggeredHours === undefined || isNaN(Number(staggeredHours))) {
+    staggeredHours = 0;
+  } else {
+    staggeredHours = Number(staggeredHours);
+  }
   
   const parts = rawDateValue.split(/[-T:]/);
   if (parts.length < 5) return null;
@@ -223,52 +236,67 @@ function calculateTimezones(rawDateValue) {
     targetDate = new Date(targetDate.getTime() - diff);
   }
 
-  function formatForTimezone(date, timeZone) {
-    const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone }).format(date);
-    const monthName = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone }).format(date);
-    const dayVal = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone }).format(date);
-    const hourParts = new Intl.DateTimeFormat('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit', 
-      hour12: true, 
-      timeZone 
-    }).formatToParts(date);
-    const hourVal = hourParts.find(p => p.type === 'hour').value;
-    const minuteVal = hourParts.find(p => p.type === 'minute').value;
-    const dayPeriod = hourParts.find(p => p.type === 'dayPeriod').value;
+  function formatTimeWindow(baseDate, timeZone, hoursToAdd) {
+    const formatOpts = { hour: 'numeric', minute: '2-digit', hour12: true, timeZone };
     
-    let tzName = "";
-    if (timeZone === 'Europe/Paris') {
-      const longTzParts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'long' }).formatToParts(date);
-      const longTzName = longTzParts.find(p => p.type === 'timeZoneName')?.value || "";
-      if (longTzName.toLowerCase().includes('summer') || longTzName.toLowerCase().includes('daylight')) {
-        tzName = 'CEST';
-      } else {
-        tzName = 'CET';
+    function cleanTimeStr(dateObj) {
+      let partsArr = new Intl.DateTimeFormat('en-US', formatOpts).formatToParts(dateObj);
+      let hVal = partsArr.find(p => p.type === 'hour').value;
+      let mVal = partsArr.find(p => p.type === 'minute').value;
+      let dayPeriod = partsArr.find(p => p.type === 'dayPeriod').value.toLowerCase();
+      
+      let fullDigitalTime = `${hVal}:${mVal} ${dayPeriod}`;
+      if (mVal === "00") {
+        if (hVal === "12" && dayPeriod === "pm") return "noon";
+        if (hVal === "12" && dayPeriod === "am") return "midnight";
       }
-    }
-    
-    if (timeZone === 'Asia/Tokyo') {
-      tzName = 'JST';
+      return fullDigitalTime;
     }
 
-    if (timeZone === 'America/Los_Angeles') {
-      const longTzParts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'long' }).formatToParts(date);
+    let startStr = cleanTimeStr(baseDate);
+    let tzName = "";
+    
+    if (timeZone === 'Europe/Paris') {
+      const longTzParts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'long' }).formatToParts(baseDate);
       const longTzName = longTzParts.find(p => p.type === 'timeZoneName')?.value || "";
-      if (longTzName.toLowerCase().includes('daylight') || longTzName.toLowerCase().includes('summer')) {
-        tzName = 'PDT';
-      } else {
-        tzName = 'PST';
+      tzName = (longTzName.toLowerCase().includes('summer') || longTzName.toLowerCase().includes('daylight')) ? 'CEST' : 'CET';
+    } else if (timeZone === 'Asia/Tokyo') {
+      tzName = 'JST';
+    } else if (timeZone === 'America/Los_Angeles') {
+      const longTzParts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'long' }).formatToParts(baseDate);
+      const longTzName = longTzParts.find(p => p.type === 'timeZoneName')?.value || "";
+      tzName = (longTzName.toLowerCase().includes('daylight') || longTzName.toLowerCase().includes('summer')) ? 'PDT' : 'PST';
+    }
+
+    if (hoursToAdd > 0) {
+      let endDate = new Date(baseDate.getTime() + (hoursToAdd * 60 * 60 * 1000));
+      let endStr = cleanTimeStr(endDate);
+      
+      const baseDay = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone }).format(baseDate);
+      const endDay = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone }).format(endDate);
+      
+      if (baseDay !== endDay) {
+        const endMonthName = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone }).format(endDate);
+        return `between ${startStr} and ${endStr} ${tzName} (${endMonthName} ${endDay})`;
       }
+      
+      return `between ${startStr} and ${endStr} ${tzName}`;
     }
     
-    return `${weekday} ${monthName} ${dayVal} at ${hourVal}:${minuteVal} ${dayPeriod} ${tzName}`;
+    const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone }).format(baseDate);
+    const monthName = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone }).format(baseDate);
+    const dayVal = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone }).format(baseDate);
+    return `${weekday} ${monthName} ${dayVal} at ${startStr.toUpperCase()} ${tzName}`;
   }
 
-  return {
-    pt: formatForTimezone(targetDate, 'America/Los_Angeles'),
-    cest: formatForTimezone(targetDate, 'Europe/Paris'),
-    jst: formatForTimezone(targetDate, 'Asia/Tokyo'),
+// Final return block for calculateTimezones() in your gs script file
+return {
+    pt: formatTimeWindow(targetDate, 'America/Los_Angeles', 0),
+    cest: formatTimeWindow(targetDate, 'Europe/Paris', 0),
+    jst: formatTimeWindow(targetDate, 'Asia/Tokyo', 0),
+    ptStaggered: formatTimeWindow(targetDate, 'America/Los_Angeles', staggeredHours),
+    cestStaggered: formatTimeWindow(targetDate, 'Europe/Paris', staggeredHours),
+    jstStaggered: formatTimeWindow(targetDate, 'Asia/Tokyo', staggeredHours),
     iso: year.toString() + (month + 1).toString().padStart(2, '0') + day.toString().padStart(2, '0') + 'T' + hour.toString().padStart(2, '0') + minute.toString().padStart(2, '0')
   };
 }
@@ -299,13 +327,13 @@ function generateMasterHtmlLayout(formData) {
     
     let processedHeaderHtml = String(rawUpperText)
       .replace(/\r?\n/g, '<br/>')
-      .replace(/(<br\s*\/?>\s*){2,}/gi, '<br/>')
       .replace(/\[\[VERSION\]\]/g, shortVersion)
       .replace(/\${cleanUrl}/g, cleanUrl);
-      
-    let tempHtml = String(rawLowerText).replace(/\r?\n/g, '<br/>').replace(/(<br\s*\/?>\s*){2,}/gi, '<br/>');
+
+    let tempHtml = String(rawLowerText).replace(/\r?\n/g, '<br/>');
 
     let processedNotesHtml = tempHtml
+      .replace(/Visit the/i, '<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 12px; margin-bottom: 12px;"/>Visit the')
       .replace(/Developer Release Notes/gi, "[[DEV_LINK_TOKEN]]");
     if (processedNotesHtml.includes("[[VERSION]] Release Notes")) {
       processedNotesHtml = processedNotesHtml.replace(/\[\[VERSION\]\] Release Notes/g, `<a href="${cleanUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none; font-weight: normal;">${shortVersion} Release Notes</a>`);
@@ -337,8 +365,10 @@ function generateMasterHtmlLayout(formData) {
     let baseFriendlyDate = formData.friendlyDate || '';
     let cleanIso = "";
     let calculatedTimes = null;
+    let staggeredHours = formData.staggeredWindowHours || 0;
+    
     if (formData.rawDateValue) {
-      calculatedTimes = calculateTimezones(formData.rawDateValue);
+      calculatedTimes = calculateTimezones(formData.rawDateValue, staggeredHours);
       if (calculatedTimes) {
         cleanIso = calculatedTimes.iso;
       }
@@ -351,7 +381,7 @@ function generateMasterHtmlLayout(formData) {
         cleanIso = formData.isoString;
       } else {
         let rawInputDate = formData.releaseDate || "2026-06-29";
-        let rawInputTime = formData.releaseTime || "17:15";     
+        let rawInputTime = formData.releaseTime || "17:15";   
         cleanIso = rawInputDate.replace(/[-]/g, "") + "T" + rawInputTime.replace(/[:]/g, "");
       }
     }
@@ -397,16 +427,19 @@ function generateMasterHtmlLayout(formData) {
     if (containsApac) affectedLabelLabels.push("APAC");
     let affectedLabelText = affectedLabelLabels.join("/") + " PODs";
     
-    let cleanAffectedPods = String(rawPodsText)
-      .replace(/(\r?\n){2,}/g, '<br/>')
+  let cleanAffectedPods = String(rawPodsText)
+      .replace(/(\r?\n){2,}/g, '<br/><br/>')
+      .replace(/\n/g, '<br/>')
       .replace(/US General Release:/gi, 'US General Release:')
       .replace(/US Limited Release:/gi, '<br/>US Limited Release:')
       .replace(/APAC General Release:/gi, '<br/>APAC General Release:')
       .replace(/APAC Limited Release:/gi, '<br/>APAC Limited Release:')
       .replace(/EU General Release:/gi, '<br/>EU General Release:')
-      .replace(/EU Limited Release:/gi, '<br/>EU Limited Release:');
+      .replace(/EU Limited Release:/gi, '<br/>EU Limited Release:')
+      .replace(/APAC Prerelease:/gi, '<br/>APAC Prerelease:')
+      .replace(/US Prerelease:/gi, '<br/>US Prerelease:')
+      .replace(/EU Prerelease:/gi, '<br/>EU Prerelease:');
 
-    // Spacing optimization: 0px bottom margin pulls When and Affected PODs tightly together
     let detailsTableMarkup = `
       <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 0px; border-collapse: collapse;">
         <tr>
@@ -423,7 +456,7 @@ function generateMasterHtmlLayout(formData) {
       </table>
     `;
 
-  let bulletsBlockMarkup = `
+    let bulletsBlockMarkup = `
       <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.4; margin-bottom: 0px; margin-top: 5px;">
         ${processedHeaderHtml}
       </div>
@@ -431,17 +464,14 @@ function generateMasterHtmlLayout(formData) {
 
     let targetTemplateString = String(formData.templateKey || "") + " " + String(formData.emailTitle || "");
     let isUpgradeTemplate = /classic|vbv|general|limited|release/i.test(targetTemplateString) && !/maintenance/i.test(targetTemplateString);
-    
-    // Tightened the top margin from 10px to 5px to close the gap
     let structuralDividerLine = `<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 5px; margin-bottom: 10px;"/>`;
-
-    // Choose styling layouts based entirely on downtime criteria states
+    
     let podsBlockMarkup = "";
-    if (isUpgradeTemplate) {
+      if (isUpgradeTemplate) {
       podsBlockMarkup = `
-        <div style="font-family: Arial, sans-serif; font-size: 16px; text-align: center; color: #333333; line-height: 1.4; margin-bottom: 10px; margin-top: 5px;">
-          <strong>Affected PODs and Deployment Start Time</strong><br/><br/>
-          ${cleanAffectedPods}
+        <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.4; margin-bottom: 10px; margin-top: 5px;">
+          <div style="text-align: center; font-size: 18px;"><strong>Affected PODs and Deployment Start Time</strong></div><br/>
+          <div style="text-align: left;">${cleanAffectedPods}</div>
         </div>
       `;
     } else {
@@ -543,15 +573,12 @@ function processPushRequest(formData) {
     if (!SENDGRID_API_KEY) throw new Error("SendGrid API Key parameter context not discovered.");
     const rawVersion = formData.version || "26R1.0.22";
     
-   const cleanReleaseType = formData.releaseType || "Maintenance Only";
-    
+    const cleanReleaseType = formData.releaseType || "Maintenance Only";
     const defaultSubject = (cleanReleaseType === "Downtime Required") 
       ? "Veeva Release Notification" 
       : "Veeva Vault Maintenance Release Notification";
-      
-    // 🌟 DYNAMIC FIX: Read the subject line and swap out [[VERSION]] tokens dynamically
     let baseSubjectText = formData.subjectLine || defaultSubject;
-    let shortVersion = rawVersion.substring(0, 4); // Grabs "26R1" format
+    let shortVersion = rawVersion.substring(0, 4);
     
     let cleanSubject = baseSubjectText.replace(/\[\[VERSION\]\]/gi, shortVersion);
     const cleanEmailTitle = formData.emailTitle || cleanSubject;
@@ -559,12 +586,9 @@ function processPushRequest(formData) {
 
     const targetSenderId = getSenderIdByEmail(SENDGRID_API_KEY, cleanFromSender);
     const compiledTitleWithVersion = cleanEmailTitle.trim() + " - " + rawVersion.trim();
-    
-    // 🌟 DYNAMIC FIX: If you already have [[VERSION]] in the string, use it. Otherwise, append raw version to the end as a fallback.
     const compiledSubjectWithVersion = baseSubjectText.includes("[[VERSION]]") || baseSubjectText.includes("[[version]]")
       ? cleanSubject.trim()
       : cleanSubject.trim() + " - " + rawVersion.trim();
-    
     const finalHtmlBody = generateMasterHtmlLayout(formData);
 
     const payload = {
@@ -581,14 +605,12 @@ function processPushRequest(formData) {
         }
       }
     };
-
     const options = {
       "method": "post",
       "headers": { "Authorization": "Bearer " + SENDGRID_API_KEY, "Content-Type": "application/json" },
       "payload": JSON.stringify(payload),
       "muteHttpExceptions": true
     };
-
     const response = UrlFetchApp.fetch("https://api.sendgrid.com/v3/marketing/singlesends", options);
     
     if (response.getResponseCode() >= 400) {
@@ -643,9 +665,7 @@ function processTrustPushRequest(formData) {
     var currentUserEmail = "your-statuscast-admin-email@company.com"; 
     var userPrefix = "System";
     var cleanReleaseType = formData.releaseType || "Maintenance Only";
-    var defaultSubject = (cleanReleaseType === "Downtime Required") 
-      ? "Veeva Release Notification" 
-      : "Veeva Vault Maintenance Release Notification";
+    var defaultSubject = (cleanReleaseType === "Downtime Required") ? "Veeva Release Notification" : "Veeva Vault Maintenance Release Notification";
     
     var baseTitle = formData.emailTitle || defaultSubject;
     var baseSubject = formData.subjectLine || defaultSubject;
@@ -757,10 +777,7 @@ function processTrustPushRequest(formData) {
     var incidentOptions = {
       "method": "post",
       "contentType": "application/json",
-      "headers": { 
-        "Authorization": authorizationValue, 
-        "accept": "application/json" 
-      },
+      "headers": { "Authorization": authorizationValue, "accept": "application/json" },
       "payload": JSON.stringify(incidentPayload),
       "muteHttpExceptions": true
     };
@@ -776,3 +793,30 @@ function processTrustPushRequest(formData) {
     return { status: 'error', message: err.message };
   }
 }
+
+function debugMaintenanceRow() {
+  const id = PropertiesService.getScriptProperties().getProperty('CommGenGSheetID');
+  Logger.log('Spreadsheet ID is: [' + id + ']');
+  
+  if (!id) {
+    Logger.log('ERROR: CommGenGSheetID property is not set!');
+    return;
+  }
+  
+  const ss = SpreadsheetApp.openById(id);
+  const sheetNames = ss.getSheets().map(s => s.getName());
+  Logger.log('Sheet tabs: ' + JSON.stringify(sheetNames));
+  
+  const sheet = ss.getSheetByName('Email Templates');
+  if (!sheet) { Logger.log('Email Templates tab NOT FOUND'); return; }
+  
+  const data = sheet.getDataRange().getValues();
+  Logger.log('Total rows: ' + data.length);
+  for (let i = 0; i < data.length; i++) {
+    Logger.log('Row ' + i + ' | A:[' + data[i][0] + '] C:[' + data[i][2] + '] D:[' + data[i][3] + ']');
+  }
+}
+
+  
+
+
