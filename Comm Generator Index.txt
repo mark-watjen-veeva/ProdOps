@@ -139,11 +139,7 @@
           <label>Release Notes URL</label>
           <input type="text" id="releaseNotes" value="https://vaulthelp.veeva.com" oninput="updatePreview()">
  
-          <div class="checkbox-row-group">
-            <input type="checkbox" id="confirmUrl">
-            <label for="confirmUrl">I confirm this URL is active</label>
-          </div>
- 
+         
           <button id="clearActionBtn" class="clear-btn" type="button" onclick="confirmClearForm()">Clear Form</button>
         </section>
  
@@ -685,7 +681,7 @@
         if (verified) { executeFormReset(); }
       }
  
-      function executeFormReset() {
+function executeFormReset() {
         if (globalTemplatesRegistry && globalTemplatesRegistry.length > 0) { document.getElementById('releaseType').value = globalTemplatesRegistry[0].key; }
         document.getElementById('envTheme').value = "PROD";
         document.getElementById('statusCastType').value = "Maintenance";
@@ -701,14 +697,16 @@
         if (masterCheck) { masterCheck.checked = false; masterCheck.indeterminate = false; }
         document.querySelectorAll('.pod-box').forEach(cb => cb.checked = false);
         document.getElementById('affectedPods').value = "";
-        document.getElementById('confirmUrl').checked = false;
+        
+        // REMOVED: document.getElementById('confirmUrl').checked = false;
+
         evaluateReleaseTypeContext();
         formatFriendlyDate();
       }
  
-      function submitData(targetPlatform) {
-        const confirmEl = document.getElementById('confirmUrl');
-        if (confirmEl && !confirmEl.checked) { alert("Confirm active URL parameter."); return; }
+ function submitData(targetPlatform) {
+        // REMOVED validation check lines targeting confirmUrl element
+        
         const releaseTypeValue = getSafeValue('releaseType', 'maintenance');
         const activeMatch = globalTemplatesRegistry.find(t => t.key === releaseTypeValue);
  
