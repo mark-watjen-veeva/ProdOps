@@ -7,9 +7,6 @@ const CONFIG = {
   DEFAULT_SPREADSHEET_ID: PropertiesService.getScriptProperties().getProperty('CommGenGSheetID')
 };
 
-/**
- * Serves the core HTML modal wrapper layout to the spreadsheet UI viewport.
- */
 function doGet() {
   return HtmlService.createTemplateFromFile('Index')
     .evaluate()
@@ -17,9 +14,6 @@ function doGet() {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-/**
- * Convenience menu trigger execution hook.
- */
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('陶 Comm Generator')
@@ -35,9 +29,6 @@ function launchGeneratorDashboardModal() {
   SpreadsheetApp.getUi().showModalDialog(uiMarkup, ' ');
 }
 
-/**
- * Compiles unique checklist tracking dimensions and individual profiles from the database sheet.
- */
 function fetchPodDataFromSheet() {
   try {
     let ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -55,14 +46,13 @@ function fetchPodDataFromSheet() {
       return { status: 'success', individualPods: [], uniqueRegions: [], uniqueReleases: [], uniqueProducts: [] };
     }
 
-    // --- UPDATED & EXISTING INDEX COORDINATES ---
-    const idxRelease = 0;   // Column A ("Release")
-    const idxPodGroup = 1;  // Column B ("Vault Pod Groups") <-- Added for Null Filtering
-    const idxPod = 2;       // Column C ("POD")
-    const idxProduct = 3;   // Column D ("Product")
-    const idxRegion = 8;    // Column I ("Region")
-    const idxUpgrade = 9;   // Column J ("Upgrade Mode")
-    const idxTrustId = 10;  // Column K ("Trust ID / StatusCast mapping link")
+    const idxRelease = 0;
+    const idxPodGroup = 1;
+    const idxPod = 2;
+    const idxProduct = 3;
+    const idxRegion = 8;
+    const idxUpgrade = 9;
+    const idxTrustId = 10;
 
     let individualPods = [];
     let podMetadata = {};
@@ -81,13 +71,11 @@ function fetchPodDataFromSheet() {
       let upgVal = row[idxUpgrade] ? String(row[idxUpgrade]).trim() : "";
       let trustVal = row[idxTrustId] ? String(row[idxTrustId]).trim() : "";
       
-      // NEW EXCLUSION GUARD: Drop row if Vault Pod Groups (Column B) is empty/null
       let podGroupVal = row[idxPodGroup] ? String(row[idxPodGroup]).trim() : "";
       if (!podGroupVal) {
         continue;
       }
 
-      // EXISTING EXCLUSION GUARD: Drop Vault Basics and LIMS Basics data lines
       if (prodVal === 'Vault Basics' || prodVal === 'LIMS Basics') {
         continue;
       }
@@ -125,9 +113,6 @@ function fetchPodDataFromSheet() {
   }
 }
 
-/**
- * Downloads layout parameters mapped inside the Templates workbook registry.
- */
 function getSpreadsheetTemplatesConfig() {
   try {
     let ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -145,15 +130,15 @@ function getSpreadsheetTemplatesConfig() {
       return { status: 'error', message: "The template configuration database is completely empty." };
     }
 
-    const idxKey = 0;       // Column A
-    const idxLabel = 1;     // Column B
-    const idxSubject = 2;   // Column C
-    const idxTitle = 3;     // Column D
-    const idxUpper = 5;     // Column F
-    const idxLower = 6;     // Column G (Email_Body_Lower)
-    const idxDowntime = 7;  // Column H (Requires_Downtime)
-    const idxNotesUrl = 8;   // Column I (Release_Notes_URL)
-    const idxStaggered = 9; // Column J (Staggered_Window_Hours)
+    const idxKey = 0;       
+    const idxLabel = 1;
+    const idxSubject = 2;   
+    const idxTitle = 3;
+    const idxUpper = 5;     
+    const idxLower = 6;
+    const idxDowntime = 7;
+    const idxNotesUrl = 8;
+    const idxStaggered = 9;
 
     let templatesRegistry = [];
     for (let i = 1; i < data.length; i++) {
@@ -193,10 +178,6 @@ function getSpreadsheetTemplatesConfig() {
   }
 }
 
-/**
- * Dynamic Timezone Calculator Helper
- * Converts a Pacific input string (America/Los_Angeles) into correct local PDT/PST, CEST/CET, and JST.
- */
 function calculateTimezones(rawDateValue, staggeredHours) {
   if (!rawDateValue) return null;
   
@@ -295,9 +276,6 @@ function calculateTimezones(rawDateValue, staggeredHours) {
   };
 }
 
-/**
- * Layout compilation core engine. Builds synchronized email layouts cleanly with tightened spacing alignments.
- */
 function generateMasterHtmlLayout(formData) {
   try {
     let rawVersion = formData.version || "26R1.0.22";
@@ -319,13 +297,11 @@ function generateMasterHtmlLayout(formData) {
     let topBannerMarkup = `<img src="${topBannerImageUrl}" alt="Top Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />`;
     let bottomBannerMarkup = `<img src="${bottomBannerImageUrl}" alt="Bottom Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />`;
     
-   let processedHeaderHtml = String(rawUpperText)
+    let processedHeaderHtml = String(rawUpperText)
       .replace(/\r?\n/g, '<br/>')
       .replace(/\[\[VERSION\]\]/g, shortVersion)
       .replace(/\${cleanUrl}/g, cleanUrl);
       
-     
-
     let processedNotesHtml = String(rawLowerText);
     processedNotesHtml = processedNotesHtml.replace(/\[\[VERSION\]\]/g, shortVersion);
 
@@ -335,24 +311,16 @@ function generateMasterHtmlLayout(formData) {
       processedNotesHtml = processedNotesHtml.replace(/Release Notes/g, `<a href="${cleanUrl}" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none; font-weight: normal;">Release Notes</a>`);
     }
 
-// CONDITIONAL WHITESPACE MATRIX ROUTING
-let targetTemplateString = String(formData.templateKey || "") + " " + String(formData.emailTitle || "");
-let isUpgradeTemplate = /classic|vbv|general|limited|release/i.test(targetTemplateString) && !/maintenance/i.test(targetTemplateString);
+    let isDowntimeRequired = (formData.requiresDowntime === true);
+    let targetTemplateString = String(formData.templateKey || "") + " " + String(formData.emailTitle || "");
+    let isVbv = /vbv/i.test(targetTemplateString);
+    let structuralDividerLine = `<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: ${isVbv ? '-8px' : '5px'}; margin-bottom: 10px;"/>`;
+    
+    if (isVbv) {
+      processedHeaderHtml = processedHeaderHtml.replace(/(<br\s*\/?>)+$/i, '');
+    }
 
-// Create an explicit check for VBV
-let isVbv = /vbv/i.test(targetTemplateString);
-
-// Tighten the margin-top dynamically if it's VBV
-let structuralDividerLine = `<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: ${isVbv ? '-8px' : '5px'}; margin-bottom: 10px;"/>`;
-
-// REFACTORED: Reusing the variable rather than re-running the regex engine
-if (isVbv) {
-  processedHeaderHtml = processedHeaderHtml.replace(/(<br\s*\/?>)+$/i, '');
-}
-
-    let isMaintenance = /maintenance/i.test(targetTemplateString);
-
-    if (isMaintenance) {
+    if (!isDowntimeRequired) {
       processedNotesHtml = processedNotesHtml
         .replace(/\[\[DEV_LINK_TOKEN\]\]/g, `<a href="https://limited.veevavault.dev/rn/" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">Developer Release Notes</a>`)
         .replace(/\[\[LOCATION_TAG\]\]/g, `<a href="https://rn.veevavault.help/en/gr/vault-pod-details/" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">here</a>`)
@@ -361,7 +329,6 @@ if (isVbv) {
         .replace(/Veeva Product Support/g, `<a href="https://support.veeva.com/hc/en-us" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">Veeva Product Support</a>`)
         .replace(/<hr\s*\/?>/gi, '<hr style="border: 0; border-top: 1px solid #dcdcdc; margin-top: 2px; margin-bottom: 2px;"/>');
     } else {
-      // Handle standard newline to break conversions only on fallback tracks
       processedNotesHtml = processedNotesHtml.replace(/\r?\n/g, '<br/>');
       processedNotesHtml = processedNotesHtml
         .replace(/Visit the/i, '<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 12px; margin-bottom: 12px;"/>Visit the')
@@ -375,7 +342,7 @@ if (isVbv) {
     }
 
     let downtimeModuleMarkup = "";
-    if (formData.requiresDowntime === true) {
+    if (isDowntimeRequired) {
       downtimeModuleMarkup = `
         <tr>
           <td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.2;">
@@ -484,10 +451,8 @@ if (isVbv) {
       </div>
     `;
 
-   
-    
     let podsBlockMarkup = "";
-    if (isUpgradeTemplate) {
+    if (isDowntimeRequired) {
       podsBlockMarkup = `
         <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.4; margin-bottom: 10px; margin-top: 5px;">
           <div style="text-align: center; font-size: 18px;"><strong>Affected PODs and Deployment Start Time</strong></div><br/>
@@ -504,7 +469,7 @@ if (isVbv) {
     }
 
     let coreBodyLayoutHTML = "";
-    if (isUpgradeTemplate) {
+    if (isDowntimeRequired) {
       coreBodyLayoutHTML = `
         ${detailsTableMarkup}
         ${bulletsBlockMarkup}
@@ -516,8 +481,7 @@ if (isVbv) {
         ${detailsTableMarkup}
         ${podsBlockMarkup}
         ${bulletsBlockMarkup}
-        
-      `; // ${structuralDividerLine}
+      `;
     }
 
     let fullMasterHtml = `
@@ -557,9 +521,6 @@ if (isVbv) {
   }
 }
 
-/**
- * Helper dependency function to resolve specific numerical Sender Profile IDs inside SendGrid's dashboard mapping
- */
 function getSenderIdByEmail(apiKey, senderEmail) {
   try {
     const url = "https://api.sendgrid.com/v3/verified_senders";
@@ -582,9 +543,6 @@ function getSenderIdByEmail(apiKey, senderEmail) {
   }
 }
 
-/**
- * LIVE SendGrid Endpoint Single-Send API Transmission Router
- */
 function processPushRequest(formData) {
   try {
     if (!formData) formData = {};
@@ -593,8 +551,7 @@ function processPushRequest(formData) {
     if (!SENDGRID_API_KEY) throw new Error("SendGrid API Key parameter context not discovered.");
     const rawVersion = formData.version || "26R1.0.22";
     
-    const cleanReleaseType = formData.releaseType || "Maintenance Only";
-    const defaultSubject = (cleanReleaseType === "Downtime Required") 
+    const defaultSubject = (formData.requiresDowntime === true) 
       ? "Veeva Release Notification" 
       : "Veeva Vault Maintenance Release Notification";
     let baseSubjectText = formData.subjectLine || defaultSubject;
@@ -642,9 +599,6 @@ function processPushRequest(formData) {
   }
 }
 
-/**
- * LIVE StatusCast Trust Incident Generation Request Framework
- */
 function processTrustPushRequest(formData) {
   try {
     if (!formData) formData = {};
@@ -684,9 +638,8 @@ function processTrustPushRequest(formData) {
     
     var currentUserEmail = "your-statuscast-admin-email@company.com"; 
     var userPrefix = "System";
-    var cleanReleaseType = formData.releaseType || "Maintenance Only";
-    var defaultSubject = (cleanReleaseType === "Downtime Required") ? "Veeva Release Notification" : "Veeva Vault Maintenance Release Notification";
     
+    var defaultSubject = (formData.requiresDowntime === true) ? "Veeva Release Notification" : "Veeva Vault Maintenance Release Notification";
     var baseTitle = formData.emailTitle || defaultSubject;
     var baseSubject = formData.subjectLine || defaultSubject;
     var rawVersion = formData.version || "26R1.0.22";
