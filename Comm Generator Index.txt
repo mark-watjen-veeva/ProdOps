@@ -199,7 +199,7 @@
         evaluateReleaseTypeContext();
       }
  
-      // ─── EVALUATE RELEASE TYPE CONTEXT ───────────────────────────────────────
+     // ─── EVALUATE RELEASE TYPE CONTEXT ───────────────────────────────────────
       function evaluateReleaseTypeContext() {
         const typeSelect = document.getElementById('releaseType');
         const upgradeSection = document.getElementById('upgradeModeFilterSection');
@@ -213,7 +213,12 @@
         const activeMatch = globalTemplatesRegistry.find(t => t.key === currentKey);
         if (!activeMatch) return;
  
-        // 1. Populate title and subject FIRST before any branch logic runs
+        const labelText = activeMatch.label ? String(activeMatch.label) : "";
+        
+        // DIRECT SOURCE OF TRUTH: Completely independent of template string names!
+        const requiresDowntime = (activeMatch.requiresDowntime === true);
+ 
+        // 1. Populate title and subject FIRST
         if (titleInput) {
           titleInput.value = activeMatch.Default_Title || activeMatch.default_title || activeMatch.title || "";
         }
@@ -233,11 +238,11 @@
           }
         }
  
-        // 2. Staggered window
+        // 2. Staggered window visibility set by data flag
         const staggeredWrapper = document.getElementById('staggeredWindowWrapper');
         const staggeredInput = document.getElementById('staggeredWindowHours');
         if (staggeredWrapper && staggeredInput) {
-          if (activeMatch.staggeredWindowHours && activeMatch.staggeredWindowHours > 0) {
+          if (requiresDowntime && activeMatch.staggeredWindowHours && activeMatch.staggeredWindowHours > 0) {
             staggeredWrapper.style.display = "block";
             staggeredInput.value = activeMatch.staggeredWindowHours;
           } else {
@@ -246,8 +251,14 @@
           }
         }
  
-        // 3. Downtime / upgrade mode branch
-        if (activeMatch.requiresDowntime === true) {
+        // 3. Downtime pane visibility set by data flag
+        const downtimeWrapper = document.getElementById('downtimeInputWrapper');
+        if (downtimeWrapper) {
+          downtimeWrapper.style.display = requiresDowntime ? "block" : "none";
+        }
+ 
+        // 4. Upgrade Mode section visibility set by data flag
+        if (requiresDowntime) {
           if (upgradeSection) upgradeSection.style.display = "flex";
         } else {
           if (upgradeSection) upgradeSection.style.display = "none";
@@ -257,38 +268,47 @@
           if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
             boxes.forEach(cb => { cb.checked = false; });
             updateMasterCheckboxState();
-            // No return here — allow function to continue
           }
         }
  
-        // 4. Classic / VBV upgrade mode button state
+        // 5. Classic / VBV button access control
         const classicBtn = document.getElementById('btn-UPGRADEMODE-Classic');
         const vbvBtn = document.getElementById('btn-UPGRADEMODE-VBV');
         const downtimeInput = document.getElementById('estimatedDowntime');
-        const labelText = activeMatch.label ? String(activeMatch.label) : "";
  
         if (classicBtn && vbvBtn) {
-          classicBtn.disabled = false;
-          vbvBtn.disabled = false;
-          classicBtn.style.opacity = "1";
-          vbvBtn.style.opacity = "1";
-          classicBtn.classList.remove('active');
-          vbvBtn.classList.remove('active');
- 
-          if (/classic/i.test(labelText)) {
-            activeUpgradeModes = ['Classic'];
-            classicBtn.classList.add('active');
-            vbvBtn.disabled = true;
-            vbvBtn.style.opacity = "0.4";
-            if (downtimeInput) downtimeInput.value = "Up to 4 Hours";
-          } else if (/vbv/i.test(labelText)) {
-            activeUpgradeModes = ['VBV'];
-            vbvBtn.classList.add('active');
+          if (!requiresDowntime) {
+            // Instantly locks out maintenance templates from selecting upgrade paths
             classicBtn.disabled = true;
+            vbvBtn.disabled = true;
+            classicBtn.classList.remove('active');
+            vbvBtn.classList.remove('active');
             classicBtn.style.opacity = "0.4";
-            if (downtimeInput) downtimeInput.value = "10 Minutes";
+            vbvBtn.style.opacity = "0.4";
           } else {
-            activeUpgradeModes = [];
+            classicBtn.disabled = false;
+            vbvBtn.disabled = false;
+            classicBtn.style.opacity = "1";
+            vbvBtn.style.opacity = "1";
+            classicBtn.classList.remove('active');
+            vbvBtn.classList.remove('active');
+ 
+            if (/classic/i.test(labelText) || /classic/i.test(currentKey)) {
+              activeUpgradeModes = ['Classic'];
+              classicBtn.classList.add('active');
+              vbvBtn.disabled = true;
+              vbvBtn.style.opacity = "0.4";
+              if (downtimeInput) downtimeInput.value = "Up to 4 Hours";
+            } else if (/vbv/i.test(labelText) || /vbv/i.test(currentKey)) {
+              activeUpgradeModes = ['VBV'];
+              vbvBtn.classList.add('active');
+              classicBtn.disabled = true;
+              classicBtn.style.opacity = "0.4";
+              if (downtimeInput) downtimeInput.value = "10 Minutes";
+            } else {
+              activeUpgradeModes = [];
+              if (downtimeInput) downtimeInput.value = "90 Minutes";
+            }
           }
  
           let boxes = document.querySelectorAll('.pod-box');
@@ -312,7 +332,7 @@
  
         calculateMatrixSelections();
       }
- 
+      
       function naturalSort(a, b) {
         return String(a).localeCompare(String(b), undefined, {numeric: true, sensitivity: 'base'});
       }
@@ -449,8 +469,11 @@
           let boxRelease = cb.getAttribute('data-release');
           let boxProduct = cb.getAttribute('data-product');
           let boxUpgradeMode = cb.getAttribute('data-upgrade-mode') ? cb.getAttribute('data-upgrade-mode').toLowerCase().trim() : "";
-          let currentTemplateKey = document.getElementById('releaseType') ? document.getElementById('releaseType').value : "";
-          let isMaintenance = currentTemplateKey.toLowerCase().includes("maintenance");
+          
+          const currentTemplateKey = document.getElementById('releaseType') ? document.getElementById('releaseType').value : "";
+          const selectedTemplate = globalTemplatesRegistry.find(t => t.key === currentTemplateKey);
+          let isMaintenance = selectedTemplate ? !selectedTemplate.requiresDowntime : true;
+          
           let matchRegion = activeRegions.length === 0 || activeRegions.includes(boxRegion);
           let matchRelease = activeReleases.length === 0 || activeReleases.includes(boxRelease);
           let matchProduct = activeProducts.length === 0 || activeProducts.includes(boxProduct);
@@ -551,8 +574,10 @@
  
         const targetRegionOrder = ["US", "EU", "APAC"];
         let compiledLines = [];
-        let currentTemplateKey = document.getElementById('releaseType') ? document.getElementById('releaseType').value : "";
-        let isMaintenanceTemplate = currentTemplateKey.toLowerCase().includes("maintenance");
+        
+        const currentTemplateKey = document.getElementById('releaseType') ? document.getElementById('releaseType').value : "";
+        const selectedTemplate = globalTemplatesRegistry.find(t => t.key === currentTemplateKey);
+        let isMaintenanceTemplate = selectedTemplate ? !selectedTemplate.requiresDowntime : true;
  
         if (isMaintenanceTemplate) {
           targetRegionOrder.forEach(regKey => {
@@ -613,7 +638,7 @@
             });
             if (currentProductLines.length > 0) { productBlocks.push(currentProductLines.join('\n\n')); }
           });
-          let horizontalRuleSeparator = '\n<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 4px; margin-bottom: 4px;"/>\n';
+          let horizontalRuleSeparator = '\n<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 4px; margin-bottom: 4px Paprika;"/>\n';
           compiledLines.push(productBlocks.join(horizontalRuleSeparator));
         }
  
@@ -640,9 +665,7 @@
             return;
           }
           const activeMatch = globalTemplatesRegistry.find(t => t.key === releaseTypeValue);
-          let targetTemplateString = String(releaseTypeValue || "") + " " + (activeMatch && activeMatch.label ? String(activeMatch.label) : "");
-          let isUpgradeTemplate = /classic|vbv|general|limited|release/i.test(targetTemplateString) && !/maintenance/i.test(targetTemplateString);
-          let isDowntimeRequired = isUpgradeTemplate ? true : (activeMatch ? activeMatch.requiresDowntime : false);
+          let isDowntimeRequired = activeMatch ? (activeMatch.requiresDowntime === true) : false;
  
           const downtimeWrapper = document.getElementById('downtimeInputWrapper');
           if (downtimeWrapper) { downtimeWrapper.style.display = isDowntimeRequired ? "block" : "none"; }
@@ -656,8 +679,8 @@
             rawDateValue: getSafeValue('dateTime', ''),
             templateKey: releaseTypeValue,
             requiresDowntime: isDowntimeRequired,
-            estimatedDowntime: getSafeValue('estimatedDowntime', '90 Minutes'),
-            staggeredWindowHours: getSafeValue('staggeredWindowHours', '0'),
+            estimatedDowntime: isDowntimeRequired ? getSafeValue('estimatedDowntime', '90 Minutes') : "",
+            staggeredWindowHours: isDowntimeRequired ? getSafeValue('staggeredWindowHours', '0') : "0",
             emailTitle: getSafeValue('emailTitle', ''),
             notesUrl: getSafeValue('releaseNotes', 'https://vaulthelp.veeva.com'),
             customNotesText: getSafeValue('emailNotes', ''),
@@ -681,7 +704,7 @@
         if (verified) { executeFormReset(); }
       }
  
-function executeFormReset() {
+      function executeFormReset() {
         if (globalTemplatesRegistry && globalTemplatesRegistry.length > 0) { document.getElementById('releaseType').value = globalTemplatesRegistry[0].key; }
         document.getElementById('envTheme').value = "PROD";
         document.getElementById('statusCastType').value = "Maintenance";
@@ -697,16 +720,12 @@ function executeFormReset() {
         if (masterCheck) { masterCheck.checked = false; masterCheck.indeterminate = false; }
         document.querySelectorAll('.pod-box').forEach(cb => cb.checked = false);
         document.getElementById('affectedPods').value = "";
-        
-        // REMOVED: document.getElementById('confirmUrl').checked = false;
-
+ 
         evaluateReleaseTypeContext();
         formatFriendlyDate();
       }
  
- function submitData(targetPlatform) {
-        // REMOVED validation check lines targeting confirmUrl element
-        
+      function submitData(targetPlatform) {
         const releaseTypeValue = getSafeValue('releaseType', 'maintenance');
         const activeMatch = globalTemplatesRegistry.find(t => t.key === releaseTypeValue);
  
@@ -764,9 +783,3 @@ function executeFormReset() {
     </script>
   </body>
 </html>
- 
-
-
-
-
-
