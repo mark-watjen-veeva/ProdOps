@@ -1,0 +1,361 @@
+/**
+ * FILE: EmailRenderer.gs
+ * LAYER: Rendering
+ * PURPOSE: Builds the complete HTML email layout for both live preview and API dispatch.
+ *
+ * PHASE 1 FIXES APPLIED:
+ *   P1-02 | All template literals (backticks) removed. All string assembly uses
+ *          | explicit "+" concatenation, making this file safe in the GAS doGet() sandbox.
+ *   P1-04 | This is now the single canonical copy of generateMasterHtmlLayout().
+ *          | The duplicate in ProcessPush is removed (see ProcessPush.gs).
+ *          | Base taken from the ProcessPush version (more recent logic) and
+ *          | converted to concatenation strings throughout.
+ *   P1-15 | Fixed EU Prerelease typo: "EU Prerelease!" -> "EU Prerelease:"
+ *
+ * DEPENDENCIES:
+ *   TimeUtil.gs  -> calculateTimezones()
+ */
+
+/**
+ * Generates the full HTML email layout for preview rendering and outbound API sends.
+ * Called by: the client-side updatePreview() via google.script.run,
+ *             processPushRequest() in ProcessPush.gs,
+ *             processTrustPushRequest() in ProcessPush.gs.
+ *
+ * @param {Object} formData  Form field values passed from the client or API dispatcher.
+ * @return {string} Complete HTML markup string for the email body.
+ */
+function generateMasterHtmlLayout(formData) {
+  try {
+    var rawVersion   = formData.version  || "26R1.0.22";
+    var shortVersion = rawVersion.substring(0, 4);
+    var cleanUrl     = formData.notesUrl || "https://vaulthelp.veeva.com";
+    var rawUpperText = formData.htmlUpper || "";
+    var rawLowerText = formData.htmlLower || "";
+    var cleanEnvTheme = formData.envTheme || "PROD";
+
+    // -- Banner image selection --
+    var topBannerImageUrl = cleanEnvTheme === "SBX"
+      ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/4b9a6798-b8ad-475d-940b-67aaeb29039f/1578x93.png"
+      : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/39e112bf-4c92-4bcb-9fca-cf442dfbff2d/776x50.png";
+
+    var bottomBannerImageUrl = cleanEnvTheme === "SBX"
+      ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/f8bb1bde-21f8-4910-a6b4-ae373a014261/1578x50.png"
+      : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/66c81663-cafb-4ec2-851d-b6c10e25dfba/779x25.png";
+
+    var topBannerMarkup = '<img src="' + topBannerImageUrl
+      + '" alt="Top Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />';
+    var bottomBannerMarkup = '<img src="' + bottomBannerImageUrl
+      + '" alt="Bottom Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />';
+
+    // -- Header HTML token processing --
+    var processedHeaderHtml = String(rawUpperText)
+      .replace(/\r?\n/g, '<br/>')
+      .replace(/\[\[VERSION\]\]/g, shortVersion)
+      .replace(/\$\{cleanUrl\}/g, cleanUrl);
+
+    // -- Footer HTML token processing --
+    var processedNotesHtml = String(rawLowerText);
+    processedNotesHtml = processedNotesHtml.replace(/\[\[VERSION\]\]/g, shortVersion);
+
+    if (processedNotesHtml.indexOf("[[VERSION]] Release Notes") !== -1) {
+      processedNotesHtml = processedNotesHtml.replace(
+        /\[\[VERSION\]\] Release Notes/g,
+        '<a href="' + cleanUrl + '" clicktracking="off" target="_blank"'
+        + ' style="color: #007bff; text-decoration: none; font-weight: normal;">'
+        + shortVersion + ' Release Notes</a>'
+      );
+    } else {
+      processedNotesHtml = processedNotesHtml.replace(
+        /Release Notes/g,
+        '<a href="' + cleanUrl + '" clicktracking="off" target="_blank"'
+        + ' style="color: #007bff; text-decoration: none; font-weight: normal;">Release Notes</a>'
+      );
+    }
+
+    // -- Template type detection --
+    var targetTemplateString = String(formData.templateKey || "") + " " + String(formData.emailTitle || "");
+    var isUpgradeTemplate    = /classic|vbv|general|limited|release/i.test(targetTemplateString)
+                            && !/maintenance/i.test(targetTemplateString);
+    var isVbv                = /vbv/i.test(targetTemplateString);
+
+    var dividerMarginTop     = isVbv ? "-8px" : "5px";
+    var structuralDividerLine = '<hr style="border: 0; border-top: 2px solid #b1b1b1;'
+      + ' margin-top: ' + dividerMarginTop + '; margin-bottom: 10px;"/>';
+
+    // Trim trailing line breaks from VBV header block.
+    if (isVbv) {
+      processedHeaderHtml = processedHeaderHtml.replace(/(<br\s*\/?>)+$/i, '');
+    }
+
+    // -- Downtime vs. Maintenance footer link processing --
+    if (!isUpgradeTemplate) {
+      // Maintenance path -- lighter HR style, no newline-to-br conversion.
+      processedNotesHtml = processedNotesHtml
+        .replace(
+          /\[\[DEV_LINK_TOKEN\]\]/g,
+          '<a href="https://limited.veevavault.dev/rn/" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">Developer Release Notes</a>'
+        )
+        .replace(
+          /\[\[LOCATION_TAG\]\]/g,
+          '<a href="https://rn.veevavault.help/en/gr/vault-pod-details/" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">here</a>'
+        )
+        .replace(/\$\{cleanUrl\}/g, cleanUrl)
+        .replace(
+          /Veeva Trust Site/g,
+          '<a href="https://trust.veeva.com" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">Veeva Trust Site</a>'
+        )
+        .replace(
+          /Veeva Product Support/g,
+          '<a href="https://support.veeva.com/hc/en-us" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">Veeva Product Support</a>'
+        )
+        .replace(
+          /<hr\s*\/?>/gi,
+          '<hr style="border: 0; border-top: 1px solid #dcdcdc; margin-top: 2px; margin-bottom: 2px;"/>'
+        );
+    } else {
+      // Upgrade/downtime path -- heavier HR style, newlines converted to <br/>.
+      processedNotesHtml = processedNotesHtml.replace(/\r?\n/g, '<br/>');
+      processedNotesHtml = processedNotesHtml
+        .replace(
+          /Visit the/i,
+          '<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 12px; margin-bottom: 12px;"/>Visit the'
+        )
+        .replace(
+          /\[\[DEV_LINK_TOKEN\]\]/g,
+          '<a href="https://limited.veevavault.dev/rn/" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">Developer Release Notes</a>'
+        )
+        .replace(
+          /\[\[LOCATION_TAG\]\]/g,
+          '<a href="https://rn.veevavault.help/en/gr/vault-pod-details/" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">here</a>'
+        )
+        .replace(/\$\{cleanUrl\}/g, cleanUrl)
+        .replace(
+          /(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i,
+          '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 10px; margin-bottom: 10px;"/>'
+        )
+        .replace(
+          /Veeva Trust Site/g,
+          '<a href="https://trust.veeva.com" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">Veeva Trust Site</a>'
+        )
+        .replace(
+          /Veeva Product Support/g,
+          '<a href="https://support.veeva.com/hc/en-us" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">Veeva Product Support</a>'
+        )
+        .replace(
+          /<hr\s*\/?>/gi,
+          '<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 10px; margin-bottom: 10px;"/>'
+        );
+    }
+
+    // -- Downtime row --
+    var downtimeModuleMarkup = "";
+    if (formData.requiresDowntime === true) {
+      downtimeModuleMarkup = ''
+        + '<tr>'
+        + '<td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px;'
+        + ' color: #333333; line-height: 1.2;">'
+        + '<strong>Estimated Vault Downtime:</strong> '
+        + (formData.estimatedDowntime || '90 Minutes')
+        + '</td>'
+        + '</tr>';
+    }
+
+    // -- Timezone resolution --
+    var baseFriendlyDate = formData.friendlyDate || '';
+    var staggeredHours   = formData.staggeredWindowHours || 0;
+    var calculatedTimes  = null;
+    var cleanIso         = "";
+
+    if (formData.rawDateValue) {
+      calculatedTimes = calculateTimezones(formData.rawDateValue, staggeredHours);
+      if (calculatedTimes) cleanIso = calculatedTimes.iso;
+    }
+
+    if (!cleanIso) {
+      if (formData.targetDateIso) {
+        cleanIso = formData.targetDateIso;
+      } else if (formData.isoString) {
+        cleanIso = formData.isoString;
+      } else {
+        var rawInputDate = formData.releaseDate || "2026-06-29";
+        var rawInputTime = formData.releaseTime || "17:15";
+        cleanIso = rawInputDate.replace(/[-]/g, "") + "T" + rawInputTime.replace(/[:]/g, "");
+      }
+    }
+
+    var worldClockUrl = "https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&iso="
+      + cleanIso + "&sort=1";
+
+    var rawPodsText  = formData.affectedPods || "";
+    var containsApac = /APAC/i.test(rawPodsText);
+    var containsEu   = /EU/i.test(rawPodsText);
+
+    // Parse friendly date for multi-timezone when string.
+    var friendlyDateParts = baseFriendlyDate.split(/\s*\/\s*/);
+    var pstPart  = friendlyDateParts[0] || baseFriendlyDate;
+    var jstPart  = "";
+    var cestPart = "";
+
+    if (friendlyDateParts.length > 1) {
+      for (var fi = 0; fi < friendlyDateParts.length; fi++) {
+        if (/JST/i.test(friendlyDateParts[fi]))  jstPart  = friendlyDateParts[fi];
+        if (/CEST/i.test(friendlyDateParts[fi])) cestPart = friendlyDateParts[fi];
+      }
+    }
+
+    if (!jstPart  && containsApac) jstPart  = calculatedTimes ? calculatedTimes.jst  : "Tuesday June 30, 9:15 AM JST";
+    if (!cestPart && containsEu)   cestPart  = calculatedTimes ? calculatedTimes.cest : "Tuesday June 30, 2:15 AM CEST";
+
+    // Build the When: row timing link string.
+    var timingLinkSegments = [];
+    timingLinkSegments.push(
+      '<a href="' + worldClockUrl + '" clicktracking="off" target="_blank"'
+      + ' style="color: #007bff; text-decoration: none;">' + pstPart + '</a>'
+    );
+    if (containsEu && cestPart) {
+      timingLinkSegments.push(
+        '<a href="' + worldClockUrl + '" clicktracking="off" target="_blank"'
+        + ' style="color: #007bff; text-decoration: none;">' + cestPart + '</a>'
+      );
+    }
+    if (containsApac && jstPart) {
+      timingLinkSegments.push(
+        '<a href="' + worldClockUrl + '" clicktracking="off" target="_blank"'
+        + ' style="color: #007bff; text-decoration: none;">' + jstPart + '</a>'
+      );
+    }
+    var compiledWhenString = timingLinkSegments.join(" / ");
+
+    // Build the "Affected PODs: US/EU/APAC PODs" label.
+    var affectedLabelParts = ["US"];
+    if (containsEu)   affectedLabelParts.push("EU");
+    if (containsApac) affectedLabelParts.push("APAC");
+    var affectedLabelText = affectedLabelParts.join("/") + " PODs";
+
+    // -- POD text formatting --
+    // P1-15 FIX: "EU Prerelease!" corrected to "EU Prerelease:"
+    var cleanAffectedPods = String(rawPodsText)
+      .replace(/(\r?\n){2,}/g, '<br/><br/>')
+      .replace(/\n/g, '<br/>')
+      .replace(/US General Release:/gi,   '<br/>US General Release:')
+      .replace(/US Limited Release:/gi,   '<br/>US Limited Release:')
+      .replace(/APAC General Release:/gi, '<br/>APAC General Release:')
+      .replace(/APAC Limited Release:/gi, '<br/>APAC Limited Release:')
+      .replace(/EU General Release:/gi,   '<br/>EU General Release:')
+      .replace(/EU Limited Release:/gi,   '<br/>EU Limited Release:')
+      .replace(/APAC Prerelease:/gi,      '<br/>APAC Prerelease:')
+      .replace(/US Prerelease:/gi,        '<br/>US Prerelease:')
+      .replace(/EU Prerelease:/gi,        '<br/>EU Prerelease:');  // P1-15: was "EU Prerelease!"
+
+    // -- Details table (What / When / Downtime) --
+    var detailsTableMarkup = ''
+      + '<table border="0" cellpadding="0" cellspacing="0" width="100%"'
+      + ' style="margin-bottom: 0px; border-collapse: collapse;">'
+      + '<tr>'
+      + '<td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px;'
+      + ' color: #333333; line-height: 1.2;">'
+      + '<strong>What:</strong> Veeva Vault ' + rawVersion
+      + '</td>'
+      + '</tr>'
+      + '<tr>'
+      + '<td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px;'
+      + ' color: #333333; line-height: 1.2;">'
+      + '<strong>When:</strong> ' + compiledWhenString
+      + '</td>'
+      + '</tr>'
+      + downtimeModuleMarkup
+      + '</table>';
+
+    // -- Bullets / header block --
+    var bulletsBlockMarkup = ''
+      + '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333;'
+      + ' line-height: 1.4; margin-bottom: 0px; margin-top: 5px;">'
+      + processedHeaderHtml
+      + '</div>';
+
+    // -- PODs block --
+    var podsBlockMarkup = "";
+    if (isUpgradeTemplate) {
+      podsBlockMarkup = ''
+        + '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333;'
+        + ' line-height: 1.4; margin-bottom: 10px; margin-top: 5px;">'
+        + '<div style="text-align: center; font-size: 18px;">'
+        + '<strong>Affected PODs and Deployment Start Time</strong>'
+        + '</div><br/>'
+        + '<div style="text-align: left;">' + cleanAffectedPods + '</div>'
+        + '</div>';
+    } else {
+      podsBlockMarkup = ''
+        + '<div style="font-family: Arial, sans-serif; font-size: 14px; text-align: left;'
+        + ' color: #333333; line-height: 1.4; margin-bottom: 10px; margin-top: 0px;">'
+        + '<strong>Affected PODs:</strong> ' + affectedLabelText + '<br/>'
+        + cleanAffectedPods
+        + '</div>';
+    }
+
+    // -- Core body layout ordering --
+    var coreBodyLayoutHTML = "";
+    if (isUpgradeTemplate) {
+      coreBodyLayoutHTML = detailsTableMarkup
+        + bulletsBlockMarkup
+        + structuralDividerLine
+        + podsBlockMarkup;
+    } else {
+      coreBodyLayoutHTML = detailsTableMarkup
+        + podsBlockMarkup
+        + bulletsBlockMarkup;
+    }
+
+    // -- Full email wrapper --
+    var emailTitle = formData.emailTitle || 'Veeva Vault Release Notification';
+
+    var fullMasterHtml = ''
+      + '<div style="background-color: #f4f7f9; padding: 25px; font-family: Arial, sans-serif;">'
+      + '<table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"'
+      + ' style="max-width: 600px; background-color: #ffffff; border-collapse: collapse;'
+      + ' box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-radius: 6px; overflow: hidden;">'
+      + '<tr>'
+      + '<td style="padding: 0; line-height: 0;">' + topBannerMarkup + '</td>'
+      + '</tr>'
+      + '<tr>'
+      + '<td style="padding: 20px 20px 20px 20px; background-color: #ffffff;">'
+      + '<h2 style="font-family: Arial, sans-serif; font-size: 20px; font-weight: bold;'
+      + ' color: #000000; margin-top: 0; margin-bottom: 12px; line-height: 1.2; text-align: center;">'
+      + emailTitle
+      + '</h2>'
+      + coreBodyLayoutHTML
+      + '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333;'
+      + ' line-height: 1.4; margin-top: 10px;">'
+      + processedNotesHtml
+      + '</div>'
+      + '</td>'
+      + '</tr>'
+      + '<tr>'
+      + '<td style="padding: 0; line-height: 0;">'
+      + bottomBannerMarkup
+      + '<div style="padding: 10px 20px; background-color: #f9f9f9; font-family: Arial, sans-serif;'
+      + ' font-size: 12px; color: #666666; line-height: 1.4; border-top: 1px solid #eeeeee;">'
+      + 'You are receiving this email as you are subscribed to receive product announcement emails'
+      + ' on your Vault user profile.'
+      + '</div>'
+      + '</td>'
+      + '</tr>'
+      + '</table>'
+      + '</div>';
+
+    return fullMasterHtml;
+
+  } catch (err) {
+    Logger.log(err.stack);
+    return '<div style="color:red; padding:20px;">Error generating preview: ' + err.toString() + '</div>';
+  }
+}

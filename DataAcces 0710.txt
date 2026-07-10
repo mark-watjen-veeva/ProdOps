@@ -1,0 +1,333 @@
+/**
+ * FILE: DataAccess.gs
+ * LAYER: Data Access
+ * PURPOSE: All Google Sheets read and write operations.
+ *
+ * PHASE 1 FIXES APPLIED:
+ *   P1-05 | fetchPodDataFromSheet: hard-drops rows where podGroup (Col B/L) is
+ *          | empty, aligning with the ProcessPush version used by StatusCast.
+ *          | The old "Unmapped" fallback caused Trust submissions to include PODs
+ *          | that had no valid SendGrid group mapping.
+ *   P1-06 | saveSpreadsheetTemplate: eliminated appendRow() inside a loop.
+ *          | New rows are now collected into a batch array and written with a
+ *          | single setValues() call. Updates to existing rows still use
+ *          | targeted setValues() (one call per matched row) which is correct
+ *          | because each row may land at a different sheet position.
+ */
+
+
+// ---------------------------------------------------------------------------
+// POD DATA
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads active POD profiles from the POD Profiles configuration sheet.
+ * Excludes rows where: POD name is blank, Vault Pod Group is blank,
+ * product is Vault Basics or LIMS Basics, or release value is versioned/dated.
+ *
+ * @return {Object} status response containing:
+ *   individualPods  {Array<string>}  Sorted list of active POD names.
+ *   podMetadata     {Object}         Map of podName -> metadata object.
+ *   uniqueRegions   {Array<string>}  Sorted unique region values.
+ *   uniqueReleases  {Array<string>}  Sorted unique release values.
+ *   uniqueProducts  {Array<string>}  Sorted unique product values.
+ */
+function fetchPodDataFromSheet() {
+  try {
+    var spreadsheetId = getSpreadsheetId();
+    var ss = SpreadsheetApp.openById(spreadsheetId);
+    var sheet = ss.getSheetByName(CONFIG.PODS_SHEET);
+    if (!sheet) {
+      return {
+        status: 'error',
+        message: "Sheet labeled \"" + CONFIG.PODS_SHEET + "\" was not found."
+      };
+    }
+
+    var data = sheet.getDataRange().getDisplayValues();
+    if (data.length <= 1) {
+      return {
+        status: 'success',
+        individualPods: [],
+        podMetadata: {},
+        uniqueRegions: [],
+        uniqueReleases: [],
+        uniqueProducts: []
+      };
+    }
+
+    // Column index constants -- update here if sheet schema changes.
+    var idxRelease  = 0;   // Column A: Release
+    var idxPod      = 2;   // Column C: POD name
+    var idxProduct  = 3;   // Column D: Product
+    var idxRegion   = 8;   // Column I: Region
+    var idxUpgrade  = 9;   // Column J: Upgrade Mode
+    var idxTrustId  = 10;  // Column K: StatusCast Component ID
+    var idxPodGroup = 11;  // Column L: Vault Pod Groups (SendGrid recipient list mapping)
+    // BUG FIX: was incorrectly set to 1 (Column B) in Phase 1. Column L = index 11.
+
+    var individualPods = [];
+    var podMetadata    = {};
+    var regionsSet     = {};
+    var releasesSet    = {};
+    var productsSet    = {};
+
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+
+      var podName     = row[idxPod]      ? String(row[idxPod]).trim()      : "";
+      var podGroupVal = row[idxPodGroup] ? String(row[idxPodGroup]).trim() : "";
+
+      // Drop rows with no POD name -- nothing to render.
+      if (!podName) continue;
+
+      // PODs with no Column L value are kept for the UI (checklist + filter buttons)
+      // but flagged "Unmapped" so submitData() in the client correctly excludes them
+      // from the selectedPodGroups array sent to SendGrid.
+      // Hard-dropping empty podGroup rows here caused EU/APAC/Vault regions to vanish
+      // from the filter dashboard -- regression introduced in the Phase 1 Column L fix.
+      if (!podGroupVal) podGroupVal = "Unmapped";
+
+      var relVal   = row[idxRelease]  ? String(row[idxRelease]).trim()  : "";
+      var prodVal  = row[idxProduct]  ? String(row[idxProduct]).trim()  : "";
+      var regVal   = row[idxRegion]   ? String(row[idxRegion]).trim()   : "";
+      var upgVal   = row[idxUpgrade]  ? String(row[idxUpgrade]).trim()  : "";
+      var trustVal = row[idxTrustId]  ? String(row[idxTrustId]).trim()  : "";
+
+      // Exclude Basics product lines -- no external comms needed.
+      if (prodVal === "Vault Basics" || prodVal === "LIMS Basics") continue;
+
+      // Exclude versioned/dated release values (e.g. "24.1", "2024-01", "1/24").
+      if (relVal.indexOf("/") !== -1 || relVal.indexOf("-") !== -1 || !isNaN(relVal.charAt(0))) continue;
+
+      individualPods.push(podName);
+
+      podMetadata[podName] = {
+        region:      regVal   || "Unknown",
+        release:     relVal   || "General",
+        product:     prodVal  || "Vault",
+        upgradeMode: upgVal   || "None",
+        trustId:     trustVal,
+        podGroup:    podGroupVal
+      };
+
+      if (regVal)  regionsSet[regVal]   = true;
+      if (relVal)  releasesSet[relVal]  = true;
+      if (prodVal) productsSet[prodVal] = true;
+    }
+
+    individualPods.sort(function(a, b) {
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+    return {
+      status:         'success',
+      individualPods: individualPods,
+      podMetadata:    podMetadata,
+      uniqueRegions:  Object.keys(regionsSet).sort(),
+      uniqueReleases: Object.keys(releasesSet).sort(),
+      uniqueProducts: Object.keys(productsSet).sort()
+    };
+
+  } catch (err) {
+    Logger.log(err.stack);
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// TEMPLATE CONFIG
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads the Email Templates sheet into a client-consumable registry array.
+ * Uses getValues() (not getDisplayValues) so numeric and boolean types
+ * are preserved for the downtime flag and staggered hours columns.
+ *
+ * @return {Object} status response containing:
+ *   templates {Array<Object>} Full template registry for the client dropdown.
+ */
+function getSpreadsheetTemplatesConfig() {
+  try {
+    var spreadsheetId = getSpreadsheetId();
+    var ss = SpreadsheetApp.openById(spreadsheetId);
+    var sheet = ss.getSheetByName(CONFIG.TEMPLATES_SHEET);
+    if (!sheet) {
+      return {
+        status: 'error',
+        message: "Configuration worksheet \"" + CONFIG.TEMPLATES_SHEET + "\" missing."
+      };
+    }
+
+    var data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return {
+        status: 'error',
+        message: "The template configuration database is completely empty."
+      };
+    }
+
+    // Column index constants -- update here if sheet schema changes.
+    var idxKey       = 0;  // Column A: Unique key / slug
+    var idxLabel     = 1;  // Column B: Dropdown display label
+    var idxSubject   = 2;  // Column C: Default email subject
+    var idxTitle     = 3;  // Column D: Default email title
+    //                  4  -- Column E: unused placeholder
+    var idxUpper     = 5;  // Column F: htmlUpper (header HTML block)
+    var idxLower     = 6;  // Column G: htmlLower (footer HTML block)
+    var idxDowntime  = 7;  // Column H: requiresDowntime flag
+    var idxNotesUrl  = 8;  // Column I: Release notes URL
+    var idxStaggered = 9;  // Column J: Staggered window hours
+
+    var templatesRegistry = [];
+
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var key = String(row[idxKey]).trim();
+      if (!key) continue;
+
+      var rawDowntime    = row[idxDowntime] ? String(row[idxDowntime]).toLowerCase().trim() : "";
+      var isDowntimeTrue = (rawDowntime === "true" || rawDowntime === "yes" || rawDowntime === "1");
+
+      var sheetUrlValue = row[idxNotesUrl] ? String(row[idxNotesUrl]).trim() : "";
+      var cleanUrl = sheetUrlValue;
+      if (!sheetUrlValue
+          || sheetUrlValue.toLowerCase() === "false"
+          || sheetUrlValue.toLowerCase() === "undefined") {
+        cleanUrl = "https://vaulthelp.veeva.com";
+      }
+
+      var staggeredHours = row[idxStaggered] ? Number(row[idxStaggered]) : 0;
+      if (isNaN(staggeredHours)) staggeredHours = 0;
+
+      templatesRegistry.push({
+        key:                 key,
+        label:               (row[idxLabel] ? String(row[idxLabel]).trim() : "") || key,
+        Default_Subject:     row[idxSubject] ? String(row[idxSubject]).trim() : "",
+        subject:             row[idxSubject] ? String(row[idxSubject]).trim() : "",
+        Default_Title:       row[idxTitle]   ? String(row[idxTitle]).trim()   : "",
+        title:               row[idxTitle]   ? String(row[idxTitle]).trim()   : "",
+        requiresDowntime:    isDowntimeTrue,
+        htmlUpper:           row[idxUpper]   ? String(row[idxUpper])          : "",
+        htmlLower:           row[idxLower]   ? String(row[idxLower])          : "",
+        notesUrl:            cleanUrl,
+        releaseNotesLink:    cleanUrl,
+        staggeredWindowHours: staggeredHours
+      });
+    }
+
+    return { status: 'success', templates: templatesRegistry };
+
+  } catch (err) {
+    Logger.log(err.stack);
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// TEMPLATE SAVE
+// ---------------------------------------------------------------------------
+
+/**
+ * Saves or updates template rows in the Email Templates sheet.
+ *
+ * BATCH WRITE LOGIC:
+ *   - Rows matching an existing key -> targeted setValues() at that row position.
+ *   - Brand new rows -> collected into newRowsBatch[], then written once with
+ *     a single setValues() call after the loop. Never appendRow() inside a loop.
+ *
+ * @param {Object|Array} payload  Single template object or array of objects.
+ * @return {Object} status response object.
+ */
+function saveSpreadsheetTemplate(payload) {
+  Logger.log("[START] saveSpreadsheetTemplate execution.");
+  try {
+    var targetId = getSpreadsheetId();
+    var ss       = SpreadsheetApp.openById(targetId);
+    var sheet    = ss.getSheetByName(CONFIG.TEMPLATES_SHEET);
+    if (!sheet) {
+      throw new Error(
+        "Target configuration sheet labeled '" + CONFIG.TEMPLATES_SHEET + "' was not found."
+      );
+    }
+
+    // Read entire sheet once into memory -- no further reads inside the loop.
+    var lastRow       = sheet.getLastRow();
+    var fullDataRange = lastRow > 0 ? sheet.getRange(1, 1, lastRow, 10).getValues() : [];
+
+    // Build a lowercase key lookup for O(1) matching.
+    var existingKeys = fullDataRange.map(function(row) {
+      return row[0] ? String(row[0]).trim().toLowerCase() : "";
+    });
+
+    var itemsToProcess = Array.isArray(payload) ? payload : [payload];
+    var newRowsBatch   = [];  // Accumulates genuinely new rows for a single batch append.
+
+    for (var i = 0; i < itemsToProcess.length; i++) {
+      var item = itemsToProcess[i];
+
+      // Generate a slug key if the client submitted a new template with no key.
+      var itemKey = item.key ? String(item.key).trim() : "";
+      if (!itemKey) {
+        itemKey = String(item.label || "template")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/(^-|-$)/g, "");
+      }
+
+      var normalizedKey  = itemKey.toLowerCase();
+      var isDowntimeFlag = (item.templateType === "Downtime") ? "true" : "false";
+      var staggeredVal   = isNaN(Number(item.staggeredWindowHours)) ? 0 : Number(item.staggeredWindowHours);
+
+      // Mapped row -- column order must match the reader index constants above.
+      var mappedRow = [
+        itemKey,                                                // Col A: key
+        item.label    ? String(item.label).trim()    : "",     // Col B: label
+        item.subject  ? String(item.subject)         : "",     // Col C: subject
+        item.title    ? String(item.title)           : "",     // Col D: title
+        "",                                                     // Col E: unused
+        item.htmlUpper ? String(item.htmlUpper)      : "",     // Col F: htmlUpper
+        item.htmlLower ? String(item.htmlLower)      : "",     // Col G: htmlLower
+        isDowntimeFlag,                                        // Col H: requiresDowntime
+        item.notesUrl || "https://vaulthelp.veeva.com",        // Col I: notesUrl
+        staggeredVal                                           // Col J: staggeredWindowHours
+      ];
+
+      var matchIndex = existingKeys.indexOf(normalizedKey);
+
+      if (matchIndex !== -1) {
+        // Overwrite existing row in place -- one targeted write per match.
+        var targetRowIndex = matchIndex + 1;  // Sheet rows are 1-based.
+        sheet.getRange(targetRowIndex, 1, 1, 10).setValues([mappedRow]);
+        Logger.log("[UPDATE] Overwrote template row at sheet position: " + targetRowIndex + " (key: " + itemKey + ")");
+      } else {
+        // Queue new row for batch append -- do NOT call appendRow() here.
+        newRowsBatch.push(mappedRow);
+        Logger.log("[QUEUE] New template queued for batch write (key: " + itemKey + ")");
+      }
+    }
+
+    // Write all new rows in a single Sheets API call.
+    if (newRowsBatch.length > 0) {
+      var appendStartRow = sheet.getLastRow() + 1;
+      sheet.getRange(appendStartRow, 1, newRowsBatch.length, 10).setValues(newRowsBatch);
+      Logger.log("[BATCH APPEND] Wrote " + newRowsBatch.length + " new template row(s) starting at row " + appendStartRow);
+    }
+
+    return {
+      status:  'success',
+      message: "Template configurations saved and synchronized successfully."
+    };
+
+  } catch (err) {
+    Logger.log(err.stack);
+    return {
+      status:  'error',
+      message: "Server Execution Refusal: " + err.message
+    };
+  } finally {
+    Logger.log("[END] saveSpreadsheetTemplate execution completed.");
+  }
+}
