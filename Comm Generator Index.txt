@@ -104,7 +104,7 @@
  
           <div id="staggeredWindowWrapper" class="conditional-input-wrapper" style="display: none;">
             <label>Staggered Region Window Duration (Hours)</label>
-            <input type="number" id="staggeredWindowHours" value="2" min="0" max="12" oninput="updatePreview()">
+            <input type="number" id="staggeredWindowHours" value="2" min="0" max="12" oninput="calculateMatrixSelections(); updatePreview();">
           </div>
  
           <label>Active PODs</label>
@@ -467,7 +467,7 @@
         container.innerHTML = globalIndividualPods.map(p => {
           let meta = podMetadataMap[p] || { region: 'Unknown', release: 'Unknown', product: 'Unknown', upgradeMode: 'Unknown', podGroup: '' };
           let inputId = "chk-" + p;
-          return `<div class="pod-row-item"><input type="checkbox" id="${inputId}" class="pod-box" value="${p}" data-region="${meta.region}" data-release="${meta.release}" data-product="${meta.product}" data-upgrade-mode="${meta.upgradeMode}" data-pod-group="${meta.podGroup || ''}" onchange="calculateMatrixSelections(); updatePreview();"><label for="${inputId}">${p}</label></div>`;
+          return `<div class="pod-row-item"><input type="checkbox" id="${inputId}" class="pod-box" value="${p}" data-region="${meta.region}" data-release="${meta.release}" data-product="${meta.product}" data-upgrade-mode="${meta.upgradeMode}" data-pod-group="${meta.podGroup || ''}" data-deployment-time="${meta.deploymentTime || ''}" onchange="calculateMatrixSelections(); updatePreview();"><label for="${inputId}">${p}</label></div>`;
         }).join('');
         calculateMatrixSelections();
       }
@@ -667,44 +667,229 @@
             }
           });
         } else {
-          let productBlocks = [];
-          activeProductFilters.forEach(singleProduct => {
-            let currentProductLines = [];
-            let displayLabel = "Veeva " + singleProduct;
-            if (singleProduct === 'RegOne') displayLabel = "Veeva RegulatoryOne";
- 
-            targetRegionOrder.forEach(regKey => {
-              if (!regionalNestedMap[regKey]) return;
-              let releaseTypes = Object.keys(regionalNestedMap[regKey]).sort();
-              releaseTypes.forEach(releaseTypeTag => {
-                let finalTimeContext = "";
-                let realProductPods = [];
-                let checkedBoxes2 = [...document.querySelectorAll('.pod-box:checked')];
-                checkedBoxes2.forEach(cb => {
-                  let boxRegion = cb.getAttribute('data-region');
-                  let boxRelease = cb.getAttribute('data-release');
-                  let boxProduct = cb.getAttribute('data-product') || 'Vault';
-                  if (boxRegion === regKey && boxRelease === releaseTypeTag && boxProduct.toLowerCase() === singleProduct.toLowerCase()) {
-                    if (!realProductPods.includes(cb.value)) { realProductPods.push(cb.value); }
+          // Downtime template path (Classic and VBV).
+          // Detect VBV specifically so Column F deployment times are used per POD.
+          const isVbvTemplate = /vbv/i.test(currentTemplateKey);
+
+          // ----------------------------------------------------------------
+          // VBV PATH: group checked PODs by their individual Column F
+          // deploymentTime value. Each unique time gets its own output line
+          // with "between [start] and [start + staggeredHours]" window string.
+          // PODs with no Column F value fall back to the global datetime picker.
+          // ----------------------------------------------------------------
+          if (isVbvTemplate) {
+            let checkedBoxes2 = [...document.querySelectorAll('.pod-box:checked')];
+
+            // Parse a formatted time string like "10:00 PM PDT" into hours + minutes (24h).
+            // Returns { hours, minutes, tzSuffix } or null if unparseable.
+            function parseFormattedTime(timeStr) {
+              if (!timeStr) return null;
+              var match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+              if (!match) return null;
+              var h = parseInt(match[1], 10);
+              var m = parseInt(match[2], 10);
+              var period = match[3].toUpperCase();
+              if (period === 'PM' && h !== 12) h += 12;
+              if (period === 'AM' && h === 12) h = 0;
+              var tzSuffix = timeStr.replace(/.*?(AM|PM)/i, '').trim() || 'PDT';
+              return { hours: h, minutes: m, tzSuffix: tzSuffix };
+            }
+
+            // Build a window string "between HH:MM am/pm and HH:MM am/pm TZ (date if overnight)"
+            function buildVbvWindowString(startTimeStr, staggerHours, releaseDateStr) {
+              var parsed = parseFormattedTime(startTimeStr);
+              if (!parsed) return startTimeStr; // fallback: return raw string if unparseable
+
+              // Reconstruct a full UTC Date using the global release date + Column F time.
+              // Column F times are PT (America/Los_Angeles) wall-clock times.
+              var dateParts = releaseDateStr ? releaseDateStr.split(/[-T:]/) : [];
+              var yr = dateParts.length >= 3 ? parseInt(dateParts[0], 10) : new Date().getFullYear();
+              var mo = dateParts.length >= 3 ? parseInt(dateParts[1], 10) - 1 : new Date().getMonth();
+              var dy = dateParts.length >= 3 ? parseInt(dateParts[2], 10) : new Date().getDate();
+
+              // Build a UTC date that represents the Column F time as a PT wall-clock time.
+              // PT offset: PDT = UTC-7, PST = UTC-8. Use -7 as default (most releases are in DST).
+              var ptOffsetHours = 7;
+              var startUtcMs = Date.UTC(yr, mo, dy, parsed.hours + ptOffsetHours, parsed.minutes);
+              var startDate  = new Date(startUtcMs);
+              var endDate    = new Date(startUtcMs + (Number(staggerHours) * 60 * 60 * 1000));
+
+              // Format start and end as h:mm am/pm.
+              function fmtTime(d, tz) {
+                var opts = { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz };
+                var parts = new Intl.DateTimeFormat('en-US', opts).formatToParts(d);
+                var hv = parts.find(function(p) { return p.type === 'hour'; }).value;
+                var mv = parts.find(function(p) { return p.type === 'minute'; }).value;
+                var dp = parts.find(function(p) { return p.type === 'dayPeriod'; }).value.toLowerCase();
+                if (mv === '00' && hv === '12' && dp === 'pm') return 'noon';
+                if (mv === '00' && hv === '12' && dp === 'am') return 'midnight';
+                return hv + ':' + mv + ' ' + dp;
+              }
+
+              var startStr = fmtTime(startDate, 'America/Los_Angeles');
+              var endStr   = fmtTime(endDate,   'America/Los_Angeles');
+              var tzLabel  = parsed.tzSuffix;
+
+              // Check if window crosses midnight (different calendar day in PT).
+              var startDay = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'long', timeZone: 'America/Los_Angeles' }).format(startDate);
+              var endDay   = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'long', timeZone: 'America/Los_Angeles' }).format(endDate);
+
+              if (startDay !== endDay) {
+                return 'between ' + startStr + ' and ' + endStr + ' ' + tzLabel + ' (' + endDay + ')';
+              }
+              return 'between ' + startStr + ' and ' + endStr + ' ' + tzLabel;
+            }
+
+            // Group PODs by deploymentTime, then sub-group by region within each time.
+            // Structure: { timeKey: { regionKey: [podNames] } }
+            // "__global__" key = PODs with no Column F value, fall back to datetime picker.
+            var deployTimeGroups = {};
+            checkedBoxes2.forEach(function(cb) {
+              var dt     = cb.getAttribute('data-deployment-time') || '';
+              var region = cb.getAttribute('data-region') || 'US';
+              var timeKey = dt.trim() || '__global__';
+              if (!deployTimeGroups[timeKey]) deployTimeGroups[timeKey] = {};
+              if (!deployTimeGroups[timeKey][region]) deployTimeGroups[timeKey][region] = [];
+              deployTimeGroups[timeKey][region].push(cb.value);
+            });
+
+            // Sort time groups chronologically; __global__ always last.
+            var sortedGroupKeys = Object.keys(deployTimeGroups).sort(function(a, b) {
+              if (a === '__global__') return 1;
+              if (b === '__global__') return -1;
+              var pa = parseFormattedTime(a);
+              var pb = parseFormattedTime(b);
+              if (!pa) return 1;
+              if (!pb) return -1;
+              return (pa.hours * 60 + pa.minutes) - (pb.hours * 60 + pb.minutes);
+            });
+
+            // Region display order: US first, then EU, then APAC, then anything else.
+            var regionOrder = ['US', 'EU', 'APAC'];
+
+            // Build a world clock URL anchored to a specific Column F start time + release date.
+            // IMPORTANT: timeanddate.com fixedtime iso param is LOCAL time in the selected city
+            // (p1=5402 = Pleasanton CA = PDT). Do NOT convert to UTC -- pass PT wall-clock time
+            // directly. Adding the UTC offset causes the wrong time to display on the world clock.
+            // ah= sets the event duration in hours on the Event Time Announcer results page.
+            function buildWorldClockUrl(startTimeStr, releaseDateStr, staggerHours) {
+              var parsed = parseFormattedTime(startTimeStr);
+              if (!parsed) return '';
+              var dateParts = releaseDateStr ? releaseDateStr.split(/[-T:]/) : [];
+              var yr = dateParts.length >= 3 ? parseInt(dateParts[0], 10) : new Date().getFullYear();
+              var mo = dateParts.length >= 3 ? parseInt(dateParts[1], 10) - 1 : new Date().getMonth();
+              var dy = dateParts.length >= 3 ? parseInt(dateParts[2], 10) : new Date().getDate();
+
+              // Pass Column F time directly as PT local time -- no UTC conversion needed.
+              // timeanddate.com interprets iso as local time in the p1 city (Pleasanton CA).
+              var isoYr  = String(yr);
+              var isoMo  = String(mo + 1).padStart(2, '0');
+              var isoDy  = String(dy).padStart(2, '0');
+              var isoHr  = String(parsed.hours).padStart(2, '0');
+              var isoMin = String(parsed.minutes).padStart(2, '0');
+              var isoStr  = isoYr + '' + isoMo + '' + isoDy + 'T' + isoHr + isoMin;
+              var ahParam = (Number(staggerHours) > 0) ? '&ah=' + Number(staggerHours) : '';
+              return 'https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&iso=' + isoStr + ahParam + '&sort=1';
+            }
+
+            var vbvLines = [];
+
+            sortedGroupKeys.forEach(function(timeKey) {
+              var regionMap = deployTimeGroups[timeKey];
+
+              // Sort region keys for this time group in display order (US, EU, APAC, others).
+              var regionsInGroup = Object.keys(regionMap).sort(function(a, b) {
+                var ia = regionOrder.indexOf(a);
+                var ib = regionOrder.indexOf(b);
+                if (ia === -1) ia = 999;
+                if (ib === -1) ib = 999;
+                return ia - ib;
+              });
+
+              // Combine all regions sharing this start time into one "US/EU/APAC" prefix.
+              // Merge all PODs from every region in this group into one sorted list.
+              var combinedRegionLabel = regionsInGroup.join('/');
+              var allPodsInGroup = [];
+              regionsInGroup.forEach(function(r) {
+                allPodsInGroup = allPodsInGroup.concat(regionMap[r]);
+              });
+              allPodsInGroup = allPodsInGroup.sort(naturalSort);
+
+              var linkedWindow = '';
+
+              if (timeKey === '__global__') {
+                // No Column F -- build a combined global staggered window link.
+                // Use the first region present to determine the primary link; append others.
+                var firstRegion = regionsInGroup[0] || 'US';
+                if (firstRegion === 'US')   linkedWindow = ptStaggeredText  || '';
+                if (firstRegion === 'EU')   linkedWindow = euPtLink + cestStaggeredText || '';
+                if (firstRegion === 'APAC') linkedWindow = apacPtLink + jstStaggeredText || '';
+                if (!linkedWindow)          linkedWindow = ptStaggeredText || '';
+              } else if (Number(staggeredHours) > 0) {
+                // Build the window string with the combined region prefix and world clock link.
+                var windowText = buildVbvWindowString(timeKey, staggeredHours, rawDate);
+                var clockUrl   = buildWorldClockUrl(timeKey, rawDate, staggeredHours);
+                linkedWindow   = ' <a href="' + clockUrl + '" clicktracking="off" target="_blank"'
+                  + ' style="color: #007bff; text-decoration: none;">'
+                  + combinedRegionLabel + ' ' + windowText + '</a>';
+              } else {
+                // No staggered hours -- show raw Column F time with combined region prefix.
+                var clockUrl = buildWorldClockUrl(timeKey, rawDate, 0);
+                linkedWindow = ' <a href="' + clockUrl + '" clicktracking="off" target="_blank"'
+                  + ' style="color: #007bff; text-decoration: none;">'
+                  + combinedRegionLabel + ' ' + timeKey + '</a>';
+              }
+
+              vbvLines.push('<u>Veeva Vault</u>' + linkedWindow + ':  ' + allPodsInGroup.join(', '));
+            });
+
+            let hrSep = '\n<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 4px; margin-bottom: 4px;"/>\n';
+            compiledLines.push(vbvLines.join(hrSep));
+
+          } else {
+            // ----------------------------------------------------------------
+            // CLASSIC / OTHER DOWNTIME PATH: original global-time behaviour.
+            // All PODs in a region share the single global staggered window.
+            // ----------------------------------------------------------------
+            let productBlocks = [];
+            activeProductFilters.forEach(singleProduct => {
+              let currentProductLines = [];
+              let displayLabel = "Veeva " + singleProduct;
+              if (singleProduct === 'RegOne') displayLabel = "Veeva RegulatoryOne";
+
+              targetRegionOrder.forEach(regKey => {
+                if (!regionalNestedMap[regKey]) return;
+                let releaseTypes = Object.keys(regionalNestedMap[regKey]).sort();
+                releaseTypes.forEach(releaseTypeTag => {
+                  let finalTimeContext = "";
+                  let realProductPods = [];
+                  let checkedBoxes2 = [...document.querySelectorAll('.pod-box:checked')];
+                  checkedBoxes2.forEach(cb => {
+                    let boxRegion = cb.getAttribute('data-region');
+                    let boxRelease = cb.getAttribute('data-release');
+                    let boxProduct = cb.getAttribute('data-product') || 'Vault';
+                    if (boxRegion === regKey && boxRelease === releaseTypeTag && boxProduct.toLowerCase() === singleProduct.toLowerCase()) {
+                      if (!realProductPods.includes(cb.value)) { realProductPods.push(cb.value); }
+                    }
+                  });
+                  if (realProductPods.length > 0) {
+                    let sortedProductPods = realProductPods.sort(naturalSort);
+                    if (staggeredHours && Number(staggeredHours) > 0) {
+                      if (regKey === "US") finalTimeContext = ptStaggeredText;
+                      if (regKey === "APAC") finalTimeContext = apacPtLink + jstStaggeredText;
+                      if (regKey === "EU") finalTimeContext = euPtLink + cestStaggeredText;
+                      currentProductLines.push("<u>" + displayLabel + "</u> " + finalTimeContext + ": " + sortedProductPods.join(', '));
+                    } else {
+                      currentProductLines.push("<u>" + displayLabel + " " + regKey + ":</u> " + sortedProductPods.join(', '));
+                    }
                   }
                 });
-                if (realProductPods.length > 0) {
-                  let sortedProductPods = realProductPods.sort(naturalSort);
-                  if (staggeredHours && Number(staggeredHours) > 0) {
-                    if (regKey === "US") finalTimeContext = ptStaggeredText;
-                    if (regKey === "APAC") finalTimeContext = apacPtLink + jstStaggeredText;
-                    if (regKey === "EU") finalTimeContext = euPtLink + cestStaggeredText;
-                    currentProductLines.push("<u>" + displayLabel + "</u> " + finalTimeContext + ": " + sortedProductPods.join(', '));
-                  } else {
-                    currentProductLines.push("<u>" + displayLabel + " " + regKey + ":</u> " + sortedProductPods.join(', '));
-                  }
-                }
               });
+              if (currentProductLines.length > 0) { productBlocks.push(currentProductLines.join('\n\n')); }
             });
-            if (currentProductLines.length > 0) { productBlocks.push(currentProductLines.join('\n\n')); }
-          });
-          let horizontalRuleSeparator = '\n<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 4px; margin-bottom: 4px;"/>\n';
-          compiledLines.push(productBlocks.join(horizontalRuleSeparator));
+            let horizontalRuleSeparator = '\n<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 4px; margin-bottom: 4px;"/>\n';
+            compiledLines.push(productBlocks.join(horizontalRuleSeparator));
+          }
         }
  
         if (isMaintenanceTemplate) {
