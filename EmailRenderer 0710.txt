@@ -215,25 +215,52 @@ function generateMasterHtmlLayout(formData) {
     if (!jstPart  && containsApac) jstPart  = calculatedTimes ? calculatedTimes.jst  : "Tuesday June 30, 9:15 AM JST";
     if (!cestPart && containsEu)   cestPart  = calculatedTimes ? calculatedTimes.cest : "Tuesday June 30, 2:15 AM CEST";
 
-    // Build the When: row timing link string.
-    var timingLinkSegments = [];
-    timingLinkSegments.push(
-      '<a href="' + worldClockUrl + '" clicktracking="off" target="_blank"'
-      + ' style="color: #007bff; text-decoration: none;">' + pstPart + '</a>'
-    );
-    if (containsEu && cestPart) {
+    // Build the When: row string.
+    // VBV / Classic (upgrade templates): date only, plain text, no link, no time.
+    // Maintenance templates: linked date+time with world clock anchor.
+    var compiledWhenString = "";
+    if (isUpgradeTemplate) {
+      // Extract date-only portion from friendlyDate or rawDateValue.
+      // friendlyDate format: "Wednesday June 26 at 10:00 am PDT" -> "June 26, 2026"
+      var whenDateOnly = "";
+      if (formData.rawDateValue) {
+        var dp = formData.rawDateValue.split(/[-T:]/);
+        if (dp.length >= 3) {
+          var wYear  = parseInt(dp[0], 10);
+          var wMonth = parseInt(dp[1], 10) - 1;
+          var wDay   = parseInt(dp[2], 10);
+          var wDate  = new Date(Date.UTC(wYear, wMonth, wDay));
+          whenDateOnly = new Intl.DateTimeFormat('en-US', {
+            month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC'
+          }).format(wDate);
+        }
+      }
+      if (!whenDateOnly) {
+        // Fallback: strip time from friendlyDate if rawDateValue unavailable.
+        whenDateOnly = baseFriendlyDate.replace(/\s+at\s+.*/i, '').trim();
+      }
+      compiledWhenString = whenDateOnly;
+    } else {
+      // Maintenance path: linked date+time with world clock anchor.
+      var timingLinkSegments = [];
       timingLinkSegments.push(
         '<a href="' + worldClockUrl + '" clicktracking="off" target="_blank"'
-        + ' style="color: #007bff; text-decoration: none;">' + cestPart + '</a>'
+        + ' style="color: #007bff; text-decoration: none;">' + pstPart + '</a>'
       );
+      if (containsEu && cestPart) {
+        timingLinkSegments.push(
+          '<a href="' + worldClockUrl + '" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">' + cestPart + '</a>'
+        );
+      }
+      if (containsApac && jstPart) {
+        timingLinkSegments.push(
+          '<a href="' + worldClockUrl + '" clicktracking="off" target="_blank"'
+          + ' style="color: #007bff; text-decoration: none;">' + jstPart + '</a>'
+        );
+      }
+      compiledWhenString = timingLinkSegments.join(" / ");
     }
-    if (containsApac && jstPart) {
-      timingLinkSegments.push(
-        '<a href="' + worldClockUrl + '" clicktracking="off" target="_blank"'
-        + ' style="color: #007bff; text-decoration: none;">' + jstPart + '</a>'
-      );
-    }
-    var compiledWhenString = timingLinkSegments.join(" / ");
 
     // Build the "Affected PODs: US/EU/APAC PODs" label.
     var affectedLabelParts = ["US"];
