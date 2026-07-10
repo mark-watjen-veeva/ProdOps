@@ -1,0 +1,130 @@
+/**
+ * FILE: DevTools.gs
+ * LAYER: Development Utilities
+ * PURPOSE: Manual diagnostic tools for GAS editor use only.
+ *          None of these functions are called by the app at runtime.
+ *
+ * PHASE 2 CHANGES:
+ *   P2-01 | Extracted from ProcessPush.gs DEV UTILITIES section.
+ *          | Isolated into its own file so it is trivially easy to
+ *          | exclude from a production deployment freeze.
+ *
+ * DEPLOYMENT NOTE:
+ *   Remove or comment out this entire file before any production
+ *   deployment freeze. These functions exist only for local debugging.
+ */
+
+
+// ===========================================================================
+// SHEET DIAGNOSTICS
+// ===========================================================================
+
+/**
+ * Verifies sheet access and logs all rows from the Email Templates tab.
+ * Run manually from the GAS editor:
+ *   1. Select debugMaintenanceRow in the function dropdown.
+ *   2. Click Run.
+ *   3. Open View > Execution Log to see output.
+ */
+function debugMaintenanceRow() {
+  var id = PropertiesService.getScriptProperties().getProperty('CommGenGSheetID');
+  Logger.log('Spreadsheet ID: [' + id + ']');
+  if (!id) {
+    Logger.log('ERROR: CommGenGSheetID Script Property is not set.');
+    return;
+  }
+
+  var ss         = SpreadsheetApp.openById(id);
+  var sheetNames = ss.getSheets().map(function(s) { return s.getName(); });
+  Logger.log('Sheet tabs: ' + JSON.stringify(sheetNames));
+
+  var sheet = ss.getSheetByName('Email Templates');
+  if (!sheet) {
+    Logger.log('Email Templates tab NOT FOUND.');
+    return;
+  }
+
+  var data = sheet.getDataRange().getValues();
+  Logger.log('Total rows: ' + data.length);
+  for (var i = 0; i < data.length; i++) {
+    Logger.log('Row ' + i + ' | A:[' + data[i][0] + '] C:[' + data[i][2] + '] D:[' + data[i][3] + ']');
+  }
+}
+
+
+// ===========================================================================
+// SENDGRID DIAGNOSTICS
+// ===========================================================================
+
+/**
+ * Logs all SendGrid marketing segments available to the configured API key.
+ * Use this to verify that Column L segment names match exactly what SendGrid
+ * has on its side. Name matching is case-insensitive but otherwise exact.
+ * Run manually from the GAS editor.
+ */
+function debugSendGridSegments() {
+  var apiKey = PropertiesService.getScriptProperties().getProperty('SendGridAPIKeyID');
+  if (!apiKey) {
+    Logger.log('ERROR: SendGridAPIKeyID Script Property is not set.');
+    return;
+  }
+
+  var url = "https://api.sendgrid.com/v3/marketing/segments?page_size=100";
+  var response = UrlFetchApp.fetch(url, {
+    method:             "get",
+    headers:            { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+    muteHttpExceptions: true
+  });
+
+  Logger.log("HTTP " + response.getResponseCode());
+  var body = JSON.parse(response.getContentText());
+  var segments = body.results || body.result || [];
+  Logger.log("Total segments: " + segments.length);
+  for (var i = 0; i < segments.length; i++) {
+    Logger.log("  [" + segments[i].id + "] " + segments[i].name);
+  }
+}
+
+
+// ===========================================================================
+// STATUSCAST DIAGNOSTICS
+// ===========================================================================
+
+/**
+ * Logs all active StatusCast components for the configured page.
+ * Use this to verify that POD trustId values in Column K match the
+ * component IDs returned by StatusCast.
+ * Run manually from the GAS editor.
+ */
+function debugStatusCastComponents() {
+  var scriptProperties = PropertiesService.getScriptProperties();
+  var rawApiKey  = scriptProperties.getProperty('StatusCastProdTrustAPIKey');
+  var fullDomain = scriptProperties.getProperty('StatusCastPageID');
+  if (!rawApiKey || !fullDomain) {
+    Logger.log('ERROR: StatusCastProdTrustAPIKey or StatusCastPageID not set.');
+    return;
+  }
+
+  var apiKey             = String(rawApiKey).trim();
+  var authorizationValue = (apiKey.toLowerCase().indexOf("bearer ") === 0)
+    ? apiKey
+    : "Bearer " + apiKey;
+
+  var url = "https://" + String(fullDomain).trim() + "/api/v4/components";
+  var response = UrlFetchApp.fetch(url, {
+    method:             "get",
+    headers:            { Authorization: authorizationValue, accept: "application/json" },
+    muteHttpExceptions: true
+  });
+
+  Logger.log("HTTP " + response.getResponseCode());
+  var components = JSON.parse(response.getContentText());
+  if (!Array.isArray(components)) {
+    Logger.log("Unexpected response format: " + response.getContentText());
+    return;
+  }
+  Logger.log("Total components: " + components.length);
+  for (var i = 0; i < components.length; i++) {
+    Logger.log("  [" + components[i].id + "] " + components[i].name);
+  }
+}
