@@ -1,0 +1,188 @@
+/**
+ * FILE: TimeUtil.gs
+ * LAYER: Utility
+ * PURPOSE: Canonical server-side timezone calculator.
+ *
+ * PHASE 1 NOTES:
+ *   - This is the single authoritative copy of calculateTimezones().
+ *   - The duplicate in ProcessPush_0709 is removed in this phase.
+ *   - Template literals (backticks) removed -- all strings use concatenation
+ *     to ensure GAS doGet() sandbox safety.
+ *   - The DST correction loop is preserved as-is. It is a known-working
+ *     workaround for Intl.DateTimeFormat behaviour in the GAS V8 runtime
+ *     and is safe to leave until a Phase 2 clean rewrite.
+ *   - Called by EmailRenderer.gs server-side.
+ *   - Also callable from client via google.script.run.calculateTimezones()
+ *     if needed (Phase 3 will route the client staggered-window strings here).
+ */
+
+/**
+ * Computes PT / CEST / JST time window strings for a given raw datetime value,
+ * including optional staggered-window end times.
+ *
+ * @param {string} rawDateValue  - Datetime string in format YYYY-MM-DDTHH:MM
+ *                                 (separators may be - / T / :).
+ * @param {number} staggeredHours - Hours to add for the staggered window end time.
+ *                                  Pass 0 or omit for no staggered window.
+ * @return {Object|null} Object with keys: pt, cest, jst, ptStaggered,
+ *                       cestStaggered, jstStaggered, iso.
+ *                       Returns null if rawDateValue is missing or unparseable.
+ */
+function calculateTimezones(rawDateValue, staggeredHours) {
+  if (!rawDateValue) return null;
+
+  if (staggeredHours === undefined || isNaN(Number(staggeredHours))) {
+    staggeredHours = 0;
+  } else {
+    staggeredHours = Number(staggeredHours);
+  }
+
+  var parts = rawDateValue.split(/[-T:]/);
+  if (parts.length < 5) return null;
+
+  var year   = parseInt(parts[0], 10);
+  var month  = parseInt(parts[1], 10) - 1;
+  var day    = parseInt(parts[2], 10);
+  var hour   = parseInt(parts[3], 10);
+  var minute = parseInt(parts[4], 10);
+
+  var targetDate = new Date(Date.UTC(year, month, day, hour, minute));
+
+  // DST correction loop: aligns targetDate so that the PT representation
+  // of targetDate matches the intended PT wall-clock time the user entered.
+  // Runs at most 3 iterations; breaks early when diff reaches zero.
+  for (var i = 0; i < 3; i++) {
+    var ptParts = new Intl.DateTimeFormat('en-US', {
+      timeZone:  'America/Los_Angeles',
+      year:      'numeric',
+      month:     'numeric',
+      day:       'numeric',
+      hour:      'numeric',
+      minute:    'numeric',
+      hour12:    false
+    }).formatToParts(targetDate);
+
+    var ptMap = {};
+    for (var p = 0; p < ptParts.length; p++) {
+      ptMap[ptParts[p].type] = ptParts[p].value;
+    }
+
+    var ptHour = Number(ptMap.hour) === 24 ? 0 : Number(ptMap.hour);
+    var ptUtc  = Date.UTC(
+      Number(ptMap.year),
+      Number(ptMap.month) - 1,
+      Number(ptMap.day),
+      ptHour,
+      Number(ptMap.minute)
+    );
+
+    var diff = ptUtc - Date.UTC(year, month, day, hour, minute);
+    if (diff === 0) break;
+    targetDate = new Date(targetDate.getTime() - diff);
+  }
+
+  /**
+   * Formats a time window string for a given timezone.
+   * With hoursToAdd > 0: returns "between HH:MM am/pm and HH:MM am/pm TZ"
+   * With hoursToAdd = 0: returns "Weekday Month D at HH:MM AM/PM TZ"
+   *
+   * @param {Date}   baseDate    Base Date object (UTC-anchored).
+   * @param {string} timeZone    IANA timezone string.
+   * @param {number} hoursToAdd  Hours to add for window end time.
+   * @return {string}
+   */
+  function formatTimeWindow(baseDate, timeZone, hoursToAdd) {
+    var formatOpts = {
+      hour:     'numeric',
+      minute:   '2-digit',
+      hour12:   true,
+      timeZone: timeZone
+    };
+
+    function cleanTimeStr(dateObj) {
+      var partsArr  = new Intl.DateTimeFormat('en-US', formatOpts).formatToParts(dateObj);
+      var hVal      = "";
+      var mVal      = "";
+      var dayPeriod = "";
+      for (var j = 0; j < partsArr.length; j++) {
+        if (partsArr[j].type === 'hour')      hVal      = partsArr[j].value;
+        if (partsArr[j].type === 'minute')    mVal      = partsArr[j].value;
+        if (partsArr[j].type === 'dayPeriod') dayPeriod = partsArr[j].value.toLowerCase();
+      }
+      if (mVal === "00") {
+        if (hVal === "12" && dayPeriod === "pm") return "noon";
+        if (hVal === "12" && dayPeriod === "am") return "midnight";
+      }
+      return hVal + ":" + mVal + " " + dayPeriod;
+    }
+
+    // Resolve timezone abbreviation (PDT/PST, CEST/CET, JST).
+    var tzName = "";
+    if (timeZone === 'America/Los_Angeles') {
+      var laNameParts = new Intl.DateTimeFormat('en-US', {
+        timeZone:     timeZone,
+        timeZoneName: 'long'
+      }).formatToParts(baseDate);
+      var laLongName = "";
+      for (var k = 0; k < laNameParts.length; k++) {
+        if (laNameParts[k].type === 'timeZoneName') laLongName = laNameParts[k].value;
+      }
+      tzName = (laLongName.toLowerCase().indexOf('daylight') !== -1
+             || laLongName.toLowerCase().indexOf('summer')   !== -1)
+             ? 'PDT' : 'PST';
+    } else if (timeZone === 'Europe/Paris') {
+      var parisNameParts = new Intl.DateTimeFormat('en-US', {
+        timeZone:     timeZone,
+        timeZoneName: 'long'
+      }).formatToParts(baseDate);
+      var parisLongName = "";
+      for (var m = 0; m < parisNameParts.length; m++) {
+        if (parisNameParts[m].type === 'timeZoneName') parisLongName = parisNameParts[m].value;
+      }
+      tzName = (parisLongName.toLowerCase().indexOf('summer')  !== -1
+             || parisLongName.toLowerCase().indexOf('daylight') !== -1)
+             ? 'CEST' : 'CET';
+    } else if (timeZone === 'Asia/Tokyo') {
+      tzName = 'JST';
+    }
+
+    var startStr = cleanTimeStr(baseDate);
+
+    if (hoursToAdd > 0) {
+      var endDate  = new Date(baseDate.getTime() + (hoursToAdd * 60 * 60 * 1000));
+      var endStr   = cleanTimeStr(endDate);
+      var baseDay  = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone: timeZone }).format(baseDate);
+      var endDay   = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone: timeZone }).format(endDate);
+
+      if (baseDay !== endDay) {
+        var endMonthName = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: timeZone }).format(endDate);
+        return "between " + startStr + " and " + endStr + " " + tzName
+             + " (" + endMonthName + " " + endDay + ")";
+      }
+      return "between " + startStr + " and " + endStr + " " + tzName;
+    }
+
+    var weekday   = new Intl.DateTimeFormat('en-US', { weekday: 'long',  timeZone: timeZone }).format(baseDate);
+    var monthName = new Intl.DateTimeFormat('en-US', { month:   'long',  timeZone: timeZone }).format(baseDate);
+    var dayVal    = new Intl.DateTimeFormat('en-US', { day:     'numeric', timeZone: timeZone }).format(baseDate);
+
+    return weekday + " " + monthName + " " + dayVal + " at " + startStr.toUpperCase() + " " + tzName;
+  }
+
+  var isoString = year.toString()
+    + (month + 1).toString().padStart(2, '0')
+    + day.toString().padStart(2, '0')
+    + 'T'
+    + hour.toString().padStart(2, '0')
+    + minute.toString().padStart(2, '0');
+
+  return {
+    pt:            formatTimeWindow(targetDate, 'America/Los_Angeles', 0),
+    cest:          formatTimeWindow(targetDate, 'Europe/Paris',        0),
+    jst:           formatTimeWindow(targetDate, 'Asia/Tokyo',          0),
+    ptStaggered:   formatTimeWindow(targetDate, 'America/Los_Angeles', staggeredHours),
+    cestStaggered: formatTimeWindow(targetDate, 'Europe/Paris',        staggeredHours),
+    jstStaggered:  formatTimeWindow(targetDate, 'Asia/Tokyo',          staggeredHours),
+    iso:           isoString
+  };
+}
