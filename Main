@@ -1,0 +1,56 @@
+/**
+ * FILE: Main.gs
+ * LAYER: App Entry Points
+ * PURPOSE: GAS web app and spreadsheet UI entry points.
+ *
+ * PHASE 2 CHANGES:
+ *   P2-01 | Extracted from ProcessPush.gs. This file now owns all entry
+ *          | points: doGet(), onOpen(), launchGeneratorDashboardModal().
+ *          | ProcessPush.gs is deleted as part of Phase 2 -- its remaining
+ *          | functions now live in SendGridApi.gs and StatusCastApi.gs.
+ *
+ * DEPENDENCIES:
+ *   None. HtmlService and SpreadsheetApp are GAS globals.
+ */
+
+
+// ===========================================================================
+// WEB APP ENTRY POINT
+// ===========================================================================
+
+/**
+ * Serves the HTML modal to the web app URL.
+ * @return {HtmlOutput}
+ */
+function doGet() {
+  return HtmlService.createTemplateFromFile('Index')
+    .evaluate()
+    .setTitle('Veeva Comm Generator')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+
+// ===========================================================================
+// SPREADSHEET UI ENTRY POINTS
+// ===========================================================================
+
+/**
+ * Adds the custom Comm Generator menu to the spreadsheet UI when opened.
+ */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Comm Generator')
+    .addItem('Launch Dashboard', 'launchGeneratorDashboardModal')
+    .addToUi();
+}
+
+/**
+ * Opens the Comm Generator as a modal dialog from the spreadsheet menu.
+ */
+function launchGeneratorDashboardModal() {
+  var uiMarkup = HtmlService.createTemplateFromFile('Index')
+    .evaluate()
+    .setWidth(1250)
+    .setHeight(850);
+  SpreadsheetApp.getUi().showModalDialog(uiMarkup, ' ');
+}
