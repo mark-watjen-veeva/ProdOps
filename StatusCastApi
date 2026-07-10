@@ -1,0 +1,259 @@
+/**
+ * FILE: StatusCastApi.gs
+ * LAYER: API Dispatch -- StatusCast
+ * PURPOSE: All StatusCast Trust API interaction: component resolution
+ *          and incident draft creation.
+ *
+ * PHASE 2 CHANGES:
+ *   P2-05 | Extracted from ProcessPush.gs. This file now owns:
+ *          |   processTrustPushRequest()
+ *          | ProcessPush.gs is deleted as part of Phase 2.
+ *
+ * DEPENDENCIES (resolved automatically by GAS project scope):
+ *   Config.gs        -> getSpreadsheetId(), CONFIG
+ *   DataAccess.gs    -> fetchPodDataFromSheet() [fallback only]
+ *   EmailRenderer.gs -> generateMasterHtmlLayout()
+ */
+
+
+// ===========================================================================
+// STATUSCAST API DISPATCH
+// ===========================================================================
+
+/**
+ * Creates a StatusCast Trust incident draft from the form payload.
+ * The incident is NOT published (isPublished: false) -- it lands in StatusCast
+ * as a draft for final review before publishing.
+ *
+ * COMPONENT ID RESOLUTION:
+ *   The client passes podMetadata in formData.podMetadata, populated from
+ *   the initial fetchPodDataFromSheet() load. This eliminates the redundant
+ *   Sheets API read on every Trust submission. A defensive fallback to
+ *   fetchPodDataFromSheet() is kept for older client payload versions.
+ *
+ * INCIDENT TYPES:
+ *   Maintenance       -> ScheduledMaintenance, window anchored +24h to +28h from now.
+ *   Unavailable       -> ServiceUnavailable, Investigating post.
+ *   Performance Deg.  -> ServiceUnavailable + DegradedPerformance status.
+ *   Informational     -> Informational type and post.
+ *
+ * @param {Object} formData  Full form payload from the client submitData() call.
+ * @return {Object} status response object.
+ */
+function processTrustPushRequest(formData) {
+  try {
+    if (!formData) formData = {};
+    var scriptProperties = PropertiesService.getScriptProperties();
+
+    var rawApiKey  = scriptProperties.getProperty('StatusCastProdTrustAPIKey');
+    var fullDomain = scriptProperties.getProperty('StatusCastPageID');
+    if (!rawApiKey || !fullDomain) {
+      throw new Error("StatusCastProdTrustAPIKey or StatusCastPageID missing from Script Properties.");
+    }
+
+    // Falls back to empty string if property not yet set -- does not block execution.
+    var assignedUserEmail = scriptProperties.getProperty('StatusCastAssignedEmail') || "";
+
+    var apiKey             = String(rawApiKey).trim();
+    var authorizationValue = (apiKey.toLowerCase().indexOf("bearer ") === 0)
+      ? apiKey
+      : "Bearer " + apiKey;
+
+    // -- Step 1: Fetch active component list for ID validation ---------------
+    var componentsUrl = "https://" + String(fullDomain).trim() + "/api/v4/components";
+    var componentsResponse = UrlFetchApp.fetch(componentsUrl, {
+      method:             "get",
+      headers:            { Authorization: authorizationValue, accept: "application/json" },
+      muteHttpExceptions: true
+    });
+    if (componentsResponse.getResponseCode() !== 200) {
+      throw new Error("Failed to authenticate or fetch component map from StatusCast API.");
+    }
+
+    var activeComponentsData = JSON.parse(componentsResponse.getContentText());
+    var validStatusCastIds   = {};
+    if (Array.isArray(activeComponentsData)) {
+      for (var ci = 0; ci < activeComponentsData.length; ci++) {
+        if (activeComponentsData[ci].id) {
+          validStatusCastIds[Number(activeComponentsData[ci].id)] = true;
+        }
+      }
+    }
+
+    // -- Step 2: Resolve component IDs from affected PODs text ---------------
+    // Use podMetadata passed from client payload where available.
+    // Fallback to a fresh Sheets read only if payload is missing podMetadata
+    // (supports older client versions during the transition period).
+    var metadataSource = null;
+    if (formData.podMetadata && typeof formData.podMetadata === 'object') {
+      metadataSource = formData.podMetadata;
+      Logger.log("[TRUST] Using podMetadata from client payload (no Sheets read required).");
+    } else {
+      Logger.log("[TRUST] podMetadata not in payload -- falling back to fetchPodDataFromSheet().");
+      var sheetData = fetchPodDataFromSheet();
+      if (sheetData && sheetData.status === 'success' && sheetData.podMetadata) {
+        metadataSource = sheetData.podMetadata;
+      }
+    }
+
+    var realComponentIds    = [];
+    var droppedComponentLog = [];
+    var affectedPodsText    = formData.affectedPods || "";
+
+    if (metadataSource) {
+      var cleanTextAreaContent = affectedPodsText
+        .replace(/<\/?[^>]+(>|$)/g, " ")
+        .replace(/[\r\n]+/g, " ")
+        .trim();
+
+      var podKeys = Object.keys(metadataSource);
+      for (var pk = 0; pk < podKeys.length; pk++) {
+        var podKey   = podKeys[pk];
+        var metadata = metadataSource[podKey];
+
+        if (!metadata.trustId
+            || metadata.trustId.trim() === ""
+            || metadata.trustId.trim().toUpperCase() === "#N/A"
+            || metadata.trustId.trim().toUpperCase() === "NAN") {
+          continue;
+        }
+
+        var escapedKey  = podKey.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        var strictRegex = new RegExp("\\b" + escapedKey + "\\b", "i");
+
+        if (strictRegex.test(cleanTextAreaContent)) {
+          var numericId = Number(metadata.trustId.trim());
+          if (!isNaN(numericId)) {
+            if (validStatusCastIds[numericId]) {
+              if (realComponentIds.indexOf(numericId) === -1) {
+                realComponentIds.push(numericId);
+              }
+            } else {
+              droppedComponentLog.push("'" + podKey + "' (ID: " + numericId + ")");
+            }
+          }
+        }
+      }
+    }
+
+    if (realComponentIds.length === 0) {
+      return {
+        status:  'error',
+        message: "Aborted: No active StatusCast component IDs found for the selected PODs."
+      };
+    }
+
+    if (droppedComponentLog.length > 0) {
+      Logger.log("[TRUST] Filtered out inactive StatusCast IDs: " + JSON.stringify(droppedComponentLog));
+    }
+
+    // -- Step 3: Build incident metadata -------------------------------------
+    var now            = new Date();
+    var currentIsoDate = now.toISOString();
+    var timeToken      = now.toTimeString().split(' ')[0];
+
+    var rawVersion       = formData.version || "26R1.0.22";
+    var statusType       = formData.statusCastType || "Maintenance";
+    var cleanReleaseType = formData.releaseType || "Maintenance Only";
+    var defaultSubject   = (cleanReleaseType === "Downtime Required")
+      ? "Veeva Release Notification"
+      : "Veeva Vault Maintenance Release Notification";
+
+    var baseTitle   = formData.emailTitle  || defaultSubject;
+    var baseSubject = formData.subjectLine || defaultSubject;
+
+    var shortTag = "UNV";
+    if (statusType === "Performance Degraded" || statusType === "Performance Degradation") shortTag = "DEG";
+    if (statusType === "Maintenance")   shortTag = "MNT";
+    if (statusType === "Informational") shortTag = "INF";
+
+    var uniqueTitle       = shortTag + ": " + baseTitle.trim() + " - " + rawVersion + " (" + timeToken + ")";
+    var customSubjectLine = baseSubject.trim() + " - " + rawVersion;
+
+    // -- Step 4: Render HTML body for the incident post ----------------------
+    var structuredEmailHtmlMessage = generateMasterHtmlLayout(formData);
+
+    // -- Step 5: Build incident payload --------------------------------------
+    var incidentPayload = {
+      title:              uniqueTitle,
+      subject:            customSubjectLine,
+      isPublished:        false,
+      treatAsDowntime:    false,
+      sendNotifications:  false,
+      externalId:         "",
+      affectedComponents: realComponentIds,
+      affectedGroups:     [],
+      customFields:       [],
+      posts: [{
+        text:        structuredEmailHtmlMessage,
+        date:        currentIsoDate,
+        isPublished: false,
+        postType:    "Informational"
+      }]
+    };
+
+    // Apply type-specific overrides.
+    if (statusType === "Unavailable") {
+      incidentPayload.incidentType       = "ServiceUnavailable";
+      incidentPayload.newComponentStatus = "Unavailable";
+      incidentPayload.posts[0].postType  = "Investigating";
+
+    } else if (statusType === "Performance Degraded" || statusType === "Performance Degradation") {
+      incidentPayload.incidentType       = "ServiceUnavailable";
+      incidentPayload.newComponentStatus = "DegradedPerformance";
+      incidentPayload.posts[0].postType  = "Investigating";
+
+    } else if (statusType === "Maintenance") {
+      // Maintenance window anchored +24h to +28h from now.
+      // See Open Question Q2 in design doc re: deriving from release date.
+      var startWindow = new Date(now.getTime() + (24 * 60 * 60 * 1000));
+      var endWindow   = new Date(now.getTime() + (28 * 60 * 60 * 1000));
+
+      incidentPayload.incidentType             = "ScheduledMaintenance";
+      incidentPayload.newComponentStatus       = "Maintenance";
+      incidentPayload.startDate                = startWindow.toISOString();
+      incidentPayload.endDate                  = endWindow.toISOString();
+      incidentPayload.assignedUserEmail        = assignedUserEmail;
+      incidentPayload.scheduledMaintenance     = {
+        estimatedDurationMinutes: 240,
+        autoClose:  false,
+        reminders:  [
+          { amount: 4, unit: "Hours" },
+          { amount: 2, unit: "Days"  }
+        ]
+      };
+      incidentPayload.posts[0].postType = "Informational";
+
+    } else {
+      // Informational
+      incidentPayload.incidentType       = "Informational";
+      incidentPayload.newComponentStatus = "Informational";
+      incidentPayload.posts[0].postType  = "Informational";
+    }
+
+    // -- Step 6: Submit to StatusCast API ------------------------------------
+    var incidentUrl     = "https://" + String(fullDomain).trim() + "/api/v4/incident";
+    var incidentOptions = {
+      method:             "post",
+      contentType:        "application/json",
+      headers:            { Authorization: authorizationValue, accept: "application/json" },
+      payload:            JSON.stringify(incidentPayload),
+      muteHttpExceptions: true
+    };
+
+    var response     = UrlFetchApp.fetch(incidentUrl, incidentOptions);
+    var responseCode = response.getResponseCode();
+
+    if (responseCode >= 400) {
+      return {
+        status:  'error',
+        message: "StatusCast Server Rejection (HTTP " + responseCode + "): " + response.getContentText()
+      };
+    }
+    return { status: 'success' };
+
+  } catch (err) {
+    Logger.log(err.stack);
+    return { status: 'error', message: err.message };
+  }
+}
