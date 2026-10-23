@@ -7,10 +7,45 @@
  *   P1-02 | All template literals (backticks) removed. All string assembly uses
  *          | explicit "+" concatenation, making this file safe in the GAS doGet() sandbox.
  *   P1-04 | This is now the single canonical copy of generateMasterHtmlLayout().
- *          | The duplicate in ProcessPush is removed (see ProcessPush.gs).
- *          | Base taken from the ProcessPush version (more recent logic) and
- *          | converted to concatenation strings throughout.
  *   P1-15 | Fixed EU Prerelease typo: "EU Prerelease!" -> "EU Prerelease:"
+ *
+ * PHASE 2 FIXES APPLIED:
+ *   P2-10 | coreBodyLayoutHTML: Maintenance templates now render bulletsBlockMarkup
+ *          | ABOVE the detailsTableMarkup (between the title and the What/When rows).
+ *
+ * PHASE 3 FIXES APPLIED:
+ *   P3-01 | [[WHATS_NEW_URL]] token added to both footer processing chains.
+ *   P3-02 | [[DEV_LINK_TOKEN]] retired. Developer Release Notes anchor is owned
+ *          | entirely by the template author in htmlLower (Column G).
+ *   P3-03 | Bare /Release Notes/g catch-all regex retired. Replaced with two
+ *          | explicit token-only expansions: [[VERSION]] Release Notes and
+ *          | [[RELEASE_NOTES_URL]].
+ *   P3-04 | Anchor safety pass added after both footer replacement chains.
+ *          | Injects target="_blank", clicktracking="off", and an explicit
+ *          | style="color: #007bff; text-decoration: none;" into any <a> tag
+ *          | missing each respective attribute.
+ *
+ * PHASE 4 CHANGES:
+ *   P4-03 | [[OPTIONAL_BLOCK]] token resolution added immediately after the
+ *          | anchor safety pass and before the downtime/duration row build.
+ *          | Reads formData.activeOptionalBlockHtml (string or empty).
+ *          | Three resolution paths:
+ *          |   a) Token present + block selected -> inject at token position.
+ *          |   b) Token absent + block selected  -> append after footer content
+ *          |      (legacy fallback for templates saved before this feature).
+ *          |   c) No block selected              -> token removed silently.
+ *          | The optional block is injected BEFORE the anchor safety pass
+ *          | cannot run again, so any links authored in optional blocks that
+ *          | were not hand-coded with correct attributes are already covered
+ *          | by the pass that ran on processedNotesHtml above -- the optional
+ *          | block is appended to processedNotesHtml and then a targeted
+ *          | safety pass is applied to the combined string.
+ *   P4-05 | emailTitle previously passed formData.emailTitle straight through
+ *          | with no token processing at all, unlike htmlUpper/htmlLower/the
+ *          | optional block, which already ran the [[PRODUCT]] replacement.
+ *          | A Default_Title authored in the Email Templates sheet (Column D)
+ *          | with "[[PRODUCT]]" in it would never have been resolved. Fixed
+ *          | by applying the same replace() to emailTitle before use.
  *
  * DEPENDENCIES:
  *   TimeUtil.gs  -> calculateTimezones()
@@ -19,20 +54,27 @@
 /**
  * Generates the full HTML email layout for preview rendering and outbound API sends.
  * Called by: the client-side updatePreview() via google.script.run,
- *             processPushRequest() in ProcessPush.gs,
- *             processTrustPushRequest() in ProcessPush.gs.
+ *             processPushRequest() in SendGridApi.gs,
+ *             processTrustPushRequest() in StatusCastApi.gs.
  *
  * @param {Object} formData  Form field values passed from the client or API dispatcher.
  * @return {string} Complete HTML markup string for the email body.
  */
 function generateMasterHtmlLayout(formData) {
   try {
-    var rawVersion   = formData.version  || "26R1.0.22";
-    var shortVersion = rawVersion.substring(0, 4);
-    var cleanUrl     = formData.notesUrl || "https://vaulthelp.veeva.com";
-    var rawUpperText = formData.htmlUpper || "";
-    var rawLowerText = formData.htmlLower || "";
-    var cleanEnvTheme = formData.envTheme || "PROD";
+    var rawVersion    = formData.version      || "26R1.0.22";
+    var shortVersion  = rawVersion.substring(0, 4);
+    var cleanUrl      = formData.notesUrl     || "https://vaulthelp.veeva.com";
+    var cleanWhatsNew = (formData.whatsNewUrl && String(formData.whatsNewUrl).trim() !== "")
+                        ? String(formData.whatsNewUrl).trim()
+                        : "https://vaulthelp.veeva.com";
+    var cleanProduct  = (formData.product && String(formData.product).trim() !== "")
+                        ? String(formData.product).trim()
+                        : "Vault";
+    var rawUpperText  = formData.htmlUpper    || "";
+    var rawLowerText  = formData.htmlLower    || "";
+    var cleanEnvTheme = formData.envTheme     || "PROD";
+    var isTrustMode   = (formData.trustMode === true);
 
     // -- Banner image selection --
     var topBannerImageUrl = cleanEnvTheme === "SBX"
@@ -43,60 +85,92 @@ function generateMasterHtmlLayout(formData) {
       ? "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/f8bb1bde-21f8-4910-a6b4-ae373a014261/1578x50.png"
       : "http://cdn.mcauto-images-production.sendgrid.net/f3de798f1d5c4acf/66c81663-cafb-4ec2-851d-b6c10e25dfba/779x25.png";
 
-    var topBannerMarkup = '<img src="' + topBannerImageUrl
-      + '" alt="Top Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />';
-    var bottomBannerMarkup = '<img src="' + bottomBannerImageUrl
-      + '" alt="Bottom Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />';
+    var topBannerMarkup = isTrustMode
+      ? ""
+      : '<img src="' + topBannerImageUrl
+          + '" alt="Top Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />';
+
+    var bottomBannerMarkup = isTrustMode
+      ? ""
+      : '<img src="' + bottomBannerImageUrl
+          + '" alt="Bottom Banner" style="width: 100%; max-width: 600px; height: auto; display: block;" />';
 
     // -- Header HTML token processing --
     var processedHeaderHtml = String(rawUpperText)
       .replace(/\r?\n/g, '<br/>')
       .replace(/\[\[VERSION\]\]/g, shortVersion)
+      .replace(/\[\[PRODUCT\]\]/gi, cleanProduct)
       .replace(/\$\{cleanUrl\}/g, cleanUrl);
 
     // -- Footer HTML token processing --
-    var processedNotesHtml = String(rawLowerText);
-    processedNotesHtml = processedNotesHtml.replace(/\[\[VERSION\]\]/g, shortVersion);
+    // Order of operations:
+    //   1. [[VERSION]] Release Notes -> version-prefixed anchor using cleanUrl.
+    //      Must run BEFORE the bare [[VERSION]] pass so the combined pattern
+    //      is matched as a single unit and not split across two replacements.
+    //   2. [[RELEASE_NOTES_URL]] -> bare "Release Notes" anchor using cleanUrl.
+    //   3. Bare [[VERSION]] -> shortVersion plain text (no link).
+    //   4. All remaining token and text replacements, including [[WHATS_NEW_URL]].
+    //   5. Anchor safety pass -- runs after all chain replacements complete.
+    //   6. [[OPTIONAL_BLOCK]] -- resolved AFTER the safety pass so injected
+    //      block HTML also receives its own targeted safety pass (P4-03).
+var processedNotesHtml = String(rawLowerText);
 
-    if (processedNotesHtml.indexOf("[[VERSION]] Release Notes") !== -1) {
-      processedNotesHtml = processedNotesHtml.replace(
-        /\[\[VERSION\]\] Release Notes/g,
-        '<a href="' + cleanUrl + '" clicktracking="off" target="_blank"'
-        + ' style="color: #007bff; text-decoration: none; font-weight: normal;">'
-        + shortVersion + ' Release Notes</a>'
-      );
-    } else {
-      processedNotesHtml = processedNotesHtml.replace(
-        /Release Notes/g,
-        '<a href="' + cleanUrl + '" clicktracking="off" target="_blank"'
-        + ' style="color: #007bff; text-decoration: none; font-weight: normal;">Release Notes</a>'
-      );
-    }
+// NEW: href-based token resolution. Lets a template author write any link
+// label they want (e.g. "About the [[VERSION]] Release", "What's New in
+// [[VERSION]]") and set the link's destination, via the +Link button, to the
+// literal token text instead of a real URL. Only the href value is replaced;
+// the anchor's visible text is left exactly as authored. Must run BEFORE the
+// legacy standalone-token patterns below, since those would otherwise also
+// match (and corrupt) the token text sitting inside an href="..." attribute.
+processedNotesHtml = processedNotesHtml
+  .replace(/href\s*=\s*"\[\[RELEASE_NOTES_URL\]\]"/gi, 'href="' + cleanUrl + '"')
+  .replace(/href\s*=\s*'\[\[RELEASE_NOTES_URL\]\]'/gi, "href='" + cleanUrl + "'")
+  .replace(/href\s*=\s*"\[\[WHATS_NEW_URL\]\]"/gi, 'href="' + cleanWhatsNew + '"')
+  .replace(/href\s*=\s*'\[\[WHATS_NEW_URL\]\]'/gi, "href='" + cleanWhatsNew + "'");
+
+processedNotesHtml = processedNotesHtml.replace(
+  /\[\[VERSION\]\]\s*Release Notes/g,
+  '<a href="' + cleanUrl + '" clicktracking="off" target="_blank"'
+  + ' style="color: #007bff; text-decoration: none; font-weight: normal;">'
+  + shortVersion + ' Release Notes</a>'
+);
+
+
+    processedNotesHtml = processedNotesHtml.replace(/\[\[VERSION\]\]/g, shortVersion);
+    processedNotesHtml = processedNotesHtml.replace(/\[\[PRODUCT\]\]/gi, cleanProduct);
 
     // -- Template type detection --
-    var targetTemplateString = String(formData.templateKey || "") + " " + String(formData.emailTitle || "");
-    var isUpgradeTemplate    = /classic|vbv|general|limited|release/i.test(targetTemplateString)
-                            && !/maintenance/i.test(targetTemplateString);
-    var isVbv                = /vbv/i.test(targetTemplateString);
+    var targetTemplateString  = String(formData.templateKey || "") + " " + String(formData.emailTitle || "");
+    var isUpgradeTemplate     = /classic|vbv|general|limited|release/i.test(targetTemplateString)
+                             && !/maintenance/i.test(targetTemplateString);
+    var isVbv                 = /vbv/i.test(targetTemplateString);
 
-    var dividerMarginTop     = isVbv ? "-8px" : "5px";
-    var structuralDividerLine = '<hr style="border: 0; border-top: 2px solid #b1b1b1;'
-      + ' margin-top: ' + dividerMarginTop + '; margin-bottom: 10px;"/>';
+// -- Release label for the "What:" line --
+// Checked in priority order: more specific terms win over the generic fallback.
+var releaseLabelText = 'General Release';
+if (/limited/i.test(targetTemplateString)) {
+  releaseLabelText = 'Limited Release';
+} else if (/prerelease/i.test(targetTemplateString)) {
+  releaseLabelText = 'Prerelease';
+} else if (/general/i.test(targetTemplateString)) {
+  releaseLabelText = 'General Release';
+}
+
+    // P2-10: Scopes the header-above-details layout change exclusively to maintenance templates.
+    var isMaintenanceTemplate = /maintenance/i.test(String(formData.templateKey || ""));
+
+    var dividerMarginTop      = isVbv ? "-8px" : "5px";
+    var structuralDividerLine = '<hr style="border: 0; border-top: 3px solid #b1b1b1;'
+      + ' margin-top: ' + dividerMarginTop + '; margin-bottom: 5px;"/>';
 
     // Trim trailing line breaks from VBV header block.
-    if (isVbv) {
+    if (isVbv || isUpgradeTemplate) {
       processedHeaderHtml = processedHeaderHtml.replace(/(<br\s*\/?>)+$/i, '');
     }
 
     // -- Downtime vs. Maintenance footer link processing --
     if (!isUpgradeTemplate) {
-      // Maintenance path -- lighter HR style, no newline-to-br conversion.
       processedNotesHtml = processedNotesHtml
-        .replace(
-          /\[\[DEV_LINK_TOKEN\]\]/g,
-          '<a href="https://limited.veevavault.dev/rn/" clicktracking="off" target="_blank"'
-          + ' style="color: #007bff; text-decoration: none;">Developer Release Notes</a>'
-        )
         .replace(
           /\[\[LOCATION_TAG\]\]/g,
           '<a href="https://rn.veevavault.help/en/gr/vault-pod-details/" clicktracking="off" target="_blank"'
@@ -114,11 +188,14 @@ function generateMasterHtmlLayout(formData) {
           + ' style="color: #007bff; text-decoration: none;">Veeva Product Support</a>'
         )
         .replace(
+          /\[\[WHATS_NEW_URL\]\]/g,
+          cleanWhatsNew
+        )
+        .replace(
           /<hr\s*\/?>/gi,
           '<hr style="border: 0; border-top: 1px solid #dcdcdc; margin-top: 2px; margin-bottom: 2px;"/>'
         );
     } else {
-      // Upgrade/downtime path -- heavier HR style, newlines converted to <br/>.
       processedNotesHtml = processedNotesHtml.replace(/\r?\n/g, '<br/>');
       processedNotesHtml = processedNotesHtml
         .replace(
@@ -126,20 +203,11 @@ function generateMasterHtmlLayout(formData) {
           '<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 12px; margin-bottom: 12px;"/>Visit the'
         )
         .replace(
-          /\[\[DEV_LINK_TOKEN\]\]/g,
-          '<a href="https://limited.veevavault.dev/rn/" clicktracking="off" target="_blank"'
-          + ' style="color: #007bff; text-decoration: none;">Developer Release Notes</a>'
-        )
-        .replace(
           /\[\[LOCATION_TAG\]\]/g,
           '<a href="https://rn.veevavault.help/en/gr/vault-pod-details/" clicktracking="off" target="_blank"'
           + ' style="color: #007bff; text-decoration: none;">here</a>'
         )
         .replace(/\$\{cleanUrl\}/g, cleanUrl)
-        .replace(
-          /(Vault's POD location\.)(?:<br\s*\/?>\s*)+/i,
-          '$1<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 10px; margin-bottom: 10px;"/>'
-        )
         .replace(
           /Veeva Trust Site/g,
           '<a href="https://trust.veeva.com" clicktracking="off" target="_blank"'
@@ -151,19 +219,119 @@ function generateMasterHtmlLayout(formData) {
           + ' style="color: #007bff; text-decoration: none;">Veeva Product Support</a>'
         )
         .replace(
+          /\[\[WHATS_NEW_URL\]\]/g,
+          cleanWhatsNew
+        )
+        .replace(
           /<hr\s*\/?>/gi,
           '<hr style="border: 0; border-top: 2px solid #b1b1b1; margin-top: 10px; margin-bottom: 10px;"/>'
         );
     }
 
-    // -- Downtime row --
+    // -- Anchor safety pass --
+    // Runs on processedNotesHtml after both replacement chains complete.
+    // Ensures every <a> tag in the footer block has the correct attributes.
+    // All three checks use negative lookahead so already-correct anchors are never double-written.
+    processedNotesHtml = processedNotesHtml.replace(
+      /<a(?![^>]*\btarget\s*=)/gi,
+      '<a target="_blank"'
+    );
+    processedNotesHtml = processedNotesHtml.replace(
+      /<a(?![^>]*\bclicktracking\s*=)/gi,
+      '<a clicktracking="off"'
+    );
+    processedNotesHtml = processedNotesHtml.replace(
+      /<a(?![^>]*\bstyle\s*=)/gi,
+      '<a style="color: #007bff; text-decoration: none;"'
+    );
+
+    // -- P4-03: [[OPTIONAL_BLOCK]] token resolution --
+    // Runs after the anchor safety pass so the combined string (base footer +
+    // optional block) receives a second targeted safety pass covering links.
+    //
+    // FIX: Token replacements are applied to optBlockHtml BEFORE injection.
+    // The main replacement chains above run only on processedNotesHtml (htmlLower).
+    // Any [[VERSION]], [[LOCATION_TAG]], [[RELEASE_NOTES_URL]], or [[WHATS_NEW_URL]]
+    // tokens authored inside an optional block were injected after those chains
+    // completed, leaving them as literal unresolved text in the rendered email.
+    // The fix resolves the same token set on optBlockHtml first, then injects it.
+    //
+    // Three resolution paths:
+    //   a) Token present in htmlLower + block selected -> substitute at authored position.
+    //   b) Token absent + block selected              -> append after existing footer.
+    //   c) No block selected (empty string)           -> remove token silently.
+    var optBlockHtml = (formData.activeOptionalBlockHtml
+      && String(formData.activeOptionalBlockHtml).trim() !== "")
+      ? String(formData.activeOptionalBlockHtml)
+      : "";
+
+    // Resolve tokens inside the optional block before injection.
+  if (optBlockHtml) {
+  // NEW: same href-only resolution as the main footer chain, applied before
+  // the legacy standalone-token replacements below.
+  optBlockHtml = optBlockHtml
+    .replace(/href\s*=\s*"\[\[RELEASE_NOTES_URL\]\]"/gi, 'href="' + cleanUrl + '"')
+    .replace(/href\s*=\s*'\[\[RELEASE_NOTES_URL\]\]'/gi, "href='" + cleanUrl + "'")
+    .replace(/href\s*=\s*"\[\[WHATS_NEW_URL\]\]"/gi, 'href="' + cleanWhatsNew + '"')
+    .replace(/href\s*=\s*'\[\[WHATS_NEW_URL\]\]'/gi, "href='" + cleanWhatsNew + "'");
+
+  optBlockHtml = optBlockHtml.replace(
+    /\[\[VERSION\]\]\s*Release Notes/g,
+    '<a href="' + cleanUrl + '" clicktracking="off" target="_blank"'
+    + ' style="color: #007bff; text-decoration: none; font-weight: normal;">'
+    + shortVersion + ' Release Notes</a>'
+  );
+
+
+      optBlockHtml = optBlockHtml.replace(/\[\[VERSION\]\]/g, shortVersion);
+      optBlockHtml = optBlockHtml.replace(
+        /\[\[LOCATION_TAG\]\]/g,
+        '<a href="https://rn.veevavault.help/en/gr/vault-pod-details/" clicktracking="off" target="_blank"'
+        + ' style="color: #007bff; text-decoration: none;">here</a>'
+      );
+      optBlockHtml = optBlockHtml.replace(/\[\[WHATS_NEW_URL\]\]/g, cleanWhatsNew);
+      optBlockHtml = optBlockHtml.replace(/\[\[PRODUCT\]\]/gi, cleanProduct);
+    }
+
+    if (optBlockHtml && processedNotesHtml.indexOf("[[OPTIONAL_BLOCK]]") !== -1) {
+      // Path a: inject at the authored [[OPTIONAL_BLOCK]] position.
+      processedNotesHtml = processedNotesHtml.replace("[[OPTIONAL_BLOCK]]", optBlockHtml);
+    } else if (optBlockHtml) {
+      // Path b: legacy template with no token -- append after existing footer content.
+      processedNotesHtml = processedNotesHtml + optBlockHtml;
+    } else {
+      // Path c: no block selected -- remove the token entirely if present.
+      processedNotesHtml = processedNotesHtml.replace(/\[\[OPTIONAL_BLOCK\]\]/g, "");
+    }
+
+    // Second targeted anchor safety pass covers links in the injected optional block.
+    // Negative lookaheads ensure already-correct anchors are not double-written.
+    processedNotesHtml = processedNotesHtml.replace(
+      /<a(?![^>]*\btarget\s*=)/gi,
+      '<a target="_blank"'
+    );
+    processedNotesHtml = processedNotesHtml.replace(
+      /<a(?![^>]*\bclicktracking\s*=)/gi,
+      '<a clicktracking="off"'
+    );
+    processedNotesHtml = processedNotesHtml.replace(
+      /<a(?![^>]*\bstyle\s*=)/gi,
+      '<a style="color: #007bff; text-decoration: none;"'
+    );
+
+    // -- Downtime / Duration row --
     var downtimeModuleMarkup = "";
-    if (formData.requiresDowntime === true) {
+    var showDurationRow = formData.requiresDowntime === true
+      || /maintenance/i.test(String(formData.templateKey || ""));
+    if (showDurationRow) {
+      var durationRowLabel = /maintenance/i.test(String(formData.templateKey || ""))
+        ? "Estimated Duration"
+        : "Estimated Vault Downtime";
       downtimeModuleMarkup = ''
         + '<tr>'
         + '<td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px;'
         + ' color: #333333; line-height: 1.2;">'
-        + '<strong>Estimated Vault Downtime:</strong> '
+        + '<strong>' + durationRowLabel + ':</strong> '
         + (formData.estimatedDowntime || '90 Minutes')
         + '</td>'
         + '</tr>';
@@ -196,6 +364,7 @@ function generateMasterHtmlLayout(formData) {
       + cleanIso + "&sort=1";
 
     var rawPodsText  = formData.affectedPods || "";
+    var containsUs   = /\bUS\b/.test(rawPodsText);
     var containsApac = /APAC/i.test(rawPodsText);
     var containsEu   = /EU/i.test(rawPodsText);
 
@@ -213,15 +382,11 @@ function generateMasterHtmlLayout(formData) {
     }
 
     if (!jstPart  && containsApac) jstPart  = calculatedTimes ? calculatedTimes.jst  : "Tuesday June 30, 9:15 AM JST";
-    if (!cestPart && containsEu)   cestPart  = calculatedTimes ? calculatedTimes.cest : "Tuesday June 30, 2:15 AM CEST";
+    if (!cestPart && containsEu)   cestPart = calculatedTimes ? calculatedTimes.cest : "Tuesday June 30, 2:15 AM CEST";
 
     // Build the When: row string.
-    // VBV / Classic (upgrade templates): date only, plain text, no link, no time.
-    // Maintenance templates: linked date+time with world clock anchor.
     var compiledWhenString = "";
     if (isUpgradeTemplate) {
-      // Extract date-only portion from friendlyDate or rawDateValue.
-      // friendlyDate format: "Wednesday June 26 at 10:00 am PDT" -> "June 26, 2026"
       var whenDateOnly = "";
       if (formData.rawDateValue) {
         var dp = formData.rawDateValue.split(/[-T:]/);
@@ -236,12 +401,10 @@ function generateMasterHtmlLayout(formData) {
         }
       }
       if (!whenDateOnly) {
-        // Fallback: strip time from friendlyDate if rawDateValue unavailable.
         whenDateOnly = baseFriendlyDate.replace(/\s+at\s+.*/i, '').trim();
       }
       compiledWhenString = whenDateOnly;
     } else {
-      // Maintenance path: linked date+time with world clock anchor.
       var timingLinkSegments = [];
       timingLinkSegments.push(
         '<a href="' + worldClockUrl + '" clicktracking="off" target="_blank"'
@@ -263,13 +426,14 @@ function generateMasterHtmlLayout(formData) {
     }
 
     // Build the "Affected PODs: US/EU/APAC PODs" label.
-    var affectedLabelParts = ["US"];
+    var affectedLabelParts = [];
+    if (containsUs)   affectedLabelParts.push("US");
     if (containsEu)   affectedLabelParts.push("EU");
     if (containsApac) affectedLabelParts.push("APAC");
+    if (affectedLabelParts.length === 0) affectedLabelParts.push("Selected");
     var affectedLabelText = affectedLabelParts.join("/") + " PODs";
 
     // -- POD text formatting --
-    // P1-15 FIX: "EU Prerelease!" corrected to "EU Prerelease:"
     var cleanAffectedPods = String(rawPodsText)
       .replace(/(\r?\n){2,}/g, '<br/><br/>')
       .replace(/\n/g, '<br/>')
@@ -281,16 +445,27 @@ function generateMasterHtmlLayout(formData) {
       .replace(/EU Limited Release:/gi,   '<br/>EU Limited Release:')
       .replace(/APAC Prerelease:/gi,      '<br/>APAC Prerelease:')
       .replace(/US Prerelease:/gi,        '<br/>US Prerelease:')
-      .replace(/EU Prerelease:/gi,        '<br/>EU Prerelease:');  // P1-15: was "EU Prerelease!"
+      .replace(/EU Prerelease:/gi,        '<br/>EU Prerelease:')
+      .replace(/US Early Release:/gi,     '<br/>US Early Release:')
+      .replace(/EU Early Release:/gi,     '<br/>EU Early Release:')
+      .replace(/APAC Early Release:/gi,   '<br/>APAC Early Release:');
 
-    // -- Details table (What / When / Downtime) --
+    // -- Details table (What / When / Downtime / Affected PODs) --
+    var affectedPodsRowMarkup = ''
+      + '<tr>'
+      + '<td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px;'
+      + ' color: #333333; line-height: 1.2;">'
+      + '<strong>Affected PODs:</strong> ' + affectedLabelText
+      + '</td>'
+      + '</tr>';
+
     var detailsTableMarkup = ''
       + '<table border="0" cellpadding="0" cellspacing="0" width="100%"'
       + ' style="margin-bottom: 0px; border-collapse: collapse;">'
       + '<tr>'
       + '<td style="padding: 2px 0; font-family: Arial, sans-serif; font-size: 14px;'
       + ' color: #333333; line-height: 1.2;">'
-      + '<strong>What:</strong> Veeva Vault ' + rawVersion
+      + '<strong>What:</strong> Veeva ' + cleanProduct + ' ' + (isUpgradeTemplate ? rawVersion + ' ' + releaseLabelText : rawVersion)
       + '</td>'
       + '</tr>'
       + '<tr>'
@@ -300,32 +475,37 @@ function generateMasterHtmlLayout(formData) {
       + '</td>'
       + '</tr>'
       + downtimeModuleMarkup
+      + affectedPodsRowMarkup
       + '</table>';
 
     // -- Bullets / header block --
+    var bulletsMarginBottom = isMaintenanceTemplate ? "12px" : "0px";
     var bulletsBlockMarkup = ''
       + '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333;'
-      + ' line-height: 1.4; margin-bottom: 0px; margin-top: 5px;">'
+      + ' line-height: 1.4; margin-bottom: ' + bulletsMarginBottom + '; margin-top: 5px;">'
       + processedHeaderHtml
       + '</div>';
 
     // -- PODs block --
+    var boldUnderlinePodsText = cleanAffectedPods
+      .split('<u>').join('<u>')
+      .split('</u>').join('</u>');
+
     var podsBlockMarkup = "";
     if (isUpgradeTemplate) {
       podsBlockMarkup = ''
         + '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333;'
-        + ' line-height: 1.4; margin-bottom: 10px; margin-top: 5px;">'
+        + ' line-height: 1.4; margin-bottom: 8px; margin-top: 5px;">'
         + '<div style="text-align: center; font-size: 18px;">'
         + '<strong>Affected PODs and Deployment Start Time</strong>'
         + '</div><br/>'
-        + '<div style="text-align: left;">' + cleanAffectedPods + '</div>'
+        + '<div style="text-align: left;">' + boldUnderlinePodsText + '</div>'
         + '</div>';
     } else {
       podsBlockMarkup = ''
         + '<div style="font-family: Arial, sans-serif; font-size: 14px; text-align: left;'
-        + ' color: #333333; line-height: 1.4; margin-bottom: 10px; margin-top: 0px;">'
-        + '<strong>Affected PODs:</strong> ' + affectedLabelText + '<br/>'
-        + cleanAffectedPods
+        + ' color: #333333; line-height: 1.4; margin-bottom: 8px; margin-top: 0px;">'
+        + boldUnderlinePodsText
         + '</div>';
     }
 
@@ -336,14 +516,28 @@ function generateMasterHtmlLayout(formData) {
         + bulletsBlockMarkup
         + structuralDividerLine
         + podsBlockMarkup;
+    } else if (isMaintenanceTemplate) {
+      coreBodyLayoutHTML = bulletsBlockMarkup
+        + detailsTableMarkup
+        + podsBlockMarkup;
     } else {
       coreBodyLayoutHTML = detailsTableMarkup
-        + podsBlockMarkup
-        + bulletsBlockMarkup;
+        + bulletsBlockMarkup
+        + podsBlockMarkup;
     }
 
     // -- Full email wrapper --
-    var emailTitle = formData.emailTitle || 'Veeva Vault Release Notification';
+    // PHASE 4 FIX (P4-05): emailTitle previously passed formData.emailTitle
+    // straight through with no token processing at all -- a Default_Title
+    // authored in the Email Templates sheet (Column D) with "[[PRODUCT]]" in
+    // it would never have been resolved, unlike htmlUpper/htmlLower/the
+    // optional block, which already ran this same replacement. Apply it here
+    // too so the email heading can be authored once with the token and
+    // automatically reflect cleanProduct, same as the rest of the template.
+    // If the title has no token in it at all (plain hardcoded text), this is
+    // a harmless no-op -- nothing to replace, title passes through unchanged.
+    var rawEmailTitle = formData.emailTitle || ('Veeva ' + cleanProduct + ' Release Notification');
+    var emailTitle     = rawEmailTitle.replace(/\[\[PRODUCT\]\]/gi, cleanProduct);
 
     var fullMasterHtml = ''
       + '<div style="background-color: #f4f7f9; padding: 25px; font-family: Arial, sans-serif;">'
@@ -355,7 +549,7 @@ function generateMasterHtmlLayout(formData) {
       + '</tr>'
       + '<tr>'
       + '<td style="padding: 20px 20px 20px 20px; background-color: #ffffff;">'
-      + '<h2 style="font-family: Arial, sans-serif; font-size: 20px; font-weight: bold;'
+      + '<h2 style="font-family: Arial, sans-serif; font-size: 18px; font-weight: bold;'
       + ' color: #000000; margin-top: 0; margin-bottom: 12px; line-height: 1.2; text-align: center;">'
       + emailTitle
       + '</h2>'
@@ -369,11 +563,15 @@ function generateMasterHtmlLayout(formData) {
       + '<tr>'
       + '<td style="padding: 0; line-height: 0;">'
       + bottomBannerMarkup
-      + '<div style="padding: 10px 20px; background-color: #f9f9f9; font-family: Arial, sans-serif;'
-      + ' font-size: 12px; color: #666666; line-height: 1.4; border-top: 1px solid #eeeeee;">'
-      + 'You are receiving this email as you are subscribed to receive product announcement emails'
-      + ' on your Vault user profile.'
-      + '</div>'
+      + (isTrustMode
+          ? ""
+          : '<div style="padding: 10px 20px; background-color: #f9f9f9; font-family: Arial, sans-serif;'
+              + ' font-size: 12px; color: #666666; line-height: 1.4; border-top: 1px solid #eeeeee;">'
+              + 'You are receiving this email as you are subscribed to receive system availability emails'
+              + ' on your ' + cleanProduct + ' user profile, or are a part of a distribution list within your organization. '
+              + 'To <a href="https://platform.veevavault.help/en/lr/7239/#notification-email">unsubscribe</a>'
+              + ' from future notifications, please contact your system administrator.'
+              + '</div>')
       + '</td>'
       + '</tr>'
       + '</table>'
