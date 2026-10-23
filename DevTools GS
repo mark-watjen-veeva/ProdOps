@@ -9,6 +9,12 @@
  *          | Isolated into its own file so it is trivially easy to
  *          | exclude from a production deployment freeze.
  *
+ * PHASE 3 CHANGES:
+ *   P3-01 | debugSegmentReconciliation: all Column L references updated to
+ *          | Column B. Column B is now the canonical SendGrid segment name
+ *          | source. idxPodGroup corrected from 11 to 1 (done in prior edit).
+ *          | All log message strings and JSDoc comments updated to match.
+ *
  * DEPLOYMENT NOTE:
  *   Remove or comment out this entire file before any production
  *   deployment freeze. These functions exist only for local debugging.
@@ -58,7 +64,7 @@ function debugMaintenanceRow() {
 
 /**
  * Logs all SendGrid marketing segments available to the configured API key.
- * Use this to verify that Column L segment names match exactly what SendGrid
+ * Use this to verify that Column B segment names match exactly what SendGrid
  * has on its side. Name matching is case-insensitive but otherwise exact.
  * Run manually from the GAS editor.
  */
@@ -127,4 +133,211 @@ function debugStatusCastComponents() {
   for (var i = 0; i < components.length; i++) {
     Logger.log("  [" + components[i].id + "] " + components[i].name);
   }
+}
+
+// ===========================================================================
+// SEGMENT-TO-POD RECONCILIATION DIAGNOSTIC
+// ===========================================================================
+
+/**
+ * Cross-references every SendGrid marketing segment against every POD's
+ * Column B (Vault Pod Group / SendGrid Segment) value from the POD Profiles
+ * sheet. Outputs three sections to the execution log:
+ *
+ *   [MATCHED]        - PODs whose Column B value resolved to a SendGrid segment ID.
+ *   [UNMATCHED POD]  - PODs with a Column B value that has NO match in SendGrid.
+ *   [ORPHAN SEGMENT] - SendGrid segments that no POD in Column B points to.
+ *
+ * HOW TO RUN:
+ *   1. Select debugSegmentReconciliation in the GAS editor function dropdown.
+ *   2. Click Run.
+ *   3. Open View > Execution Log to see the full report.
+ *
+ * USE THIS TO:
+ *   - Identify Column B values that are misspelled or have casing differences.
+ *   - Discover SendGrid segments that exist but are not yet mapped to any POD.
+ *   - Confirm which PODs are correctly wired end-to-end before a live push.
+ */
+function debugSegmentReconciliation() {
+  var scriptProperties = PropertiesService.getScriptProperties();
+
+  // -- Step 1: Fetch all SendGrid segments ----------------------------------
+  var apiKey = scriptProperties.getProperty('SendGridAPIKeyID');
+  if (!apiKey) {
+    Logger.log('ERROR: SendGridAPIKeyID Script Property is not set.');
+    return;
+  }
+
+  var segUrl = "https://api.sendgrid.com/v3/marketing/segments?page_size=100";
+  var segResponse = UrlFetchApp.fetch(segUrl, {
+    method:             "get",
+    headers:            { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+    muteHttpExceptions: true
+  });
+
+  Logger.log("SendGrid segments HTTP: " + segResponse.getResponseCode());
+  if (segResponse.getResponseCode() !== 200) {
+    Logger.log("ERROR: Could not fetch SendGrid segments. Aborting.");
+    return;
+  }
+
+  var segBody     = JSON.parse(segResponse.getContentText());
+  var allSegments = segBody.results || segBody.result || [];
+  Logger.log("Total SendGrid segments fetched: " + allSegments.length);
+
+  // Build a lowercase-name -> { id, name } map for O(1) matching.
+  var segmentByName = {};
+  for (var s = 0; s < allSegments.length; s++) {
+    var cleanName = String(allSegments[s].name || "").toLowerCase().trim();
+    if (cleanName) {
+      segmentByName[cleanName] = {
+        id:   String(allSegments[s].id),
+        name: allSegments[s].name
+      };
+    }
+  }
+
+  // -- Step 2: Read POD Profiles sheet (Column C and Column B) --------------
+  var spreadsheetId = scriptProperties.getProperty('CommGenGSheetID');
+  if (!spreadsheetId) {
+    Logger.log('ERROR: CommGenGSheetID Script Property is not set.');
+    return;
+  }
+
+  var ss    = SpreadsheetApp.openById(spreadsheetId);
+  var sheet = ss.getSheetByName('POD Profiles');
+  if (!sheet) {
+    Logger.log('ERROR: POD Profiles sheet not found.');
+    return;
+  }
+
+  var data = sheet.getDataRange().getDisplayValues();
+  Logger.log("POD Profiles rows (including header): " + data.length);
+
+  // Column index constants -- mirror DataAccess.gs exactly.
+  var idxPodGroup = 1;   // Column B: Vault Pod Group (SendGrid segment name)
+  var idxPod      = 2;   // Column C: POD name
+  var idxProduct  = 3;   // Column D: Product
+
+  var matchedRows    = [];
+  var unmatchedRows  = [];
+  var mappedSegNames = {};  // Tracks which segment names have at least one POD pointing to them.
+
+  for (var i = 1; i < data.length; i++) {
+    var row      = data[i];
+    var podName  = row[idxPod]      ? String(row[idxPod]).trim()      : "";
+    var prodVal  = row[idxProduct]  ? String(row[idxProduct]).trim()  : "";
+    var podGroup = row[idxPodGroup] ? String(row[idxPodGroup]).trim() : "";
+
+    if (!podName) continue;
+
+    // Skip Basics product lines -- they are excluded from all comms.
+    if (prodVal === "Vault Basics" || prodVal === "LIMS Basics") continue;
+
+    var searchKey = podGroup.toLowerCase();
+
+    if (!podGroup || podGroup === "") {
+      unmatchedRows.push("  [UNMATCHED POD - NO COLUMN B]  Pod: " + podName + "  |  Column B: (empty)");
+    } else if (segmentByName[searchKey]) {
+      mappedSegNames[searchKey] = true;
+      matchedRows.push(
+        "  [MATCHED]  Pod: " + podName
+        + "  |  Column B: \"" + podGroup + "\""
+        + "  |  SendGrid ID: " + segmentByName[searchKey].id
+      );
+    } else {
+      unmatchedRows.push(
+        "  [UNMATCHED POD]  Pod: " + podName
+        + "  |  Column B: \"" + podGroup + "\""
+        + "  |  -- NO SENDGRID MATCH -- (check spelling / casing)"
+      );
+    }
+  }
+
+  // -- Step 3: Find orphan SendGrid segments (no POD points to them) --------
+  var orphanRows = [];
+  var segKeys    = Object.keys(segmentByName);
+  for (var k = 0; k < segKeys.length; k++) {
+    if (!mappedSegNames[segKeys[k]]) {
+      orphanRows.push(
+        "  [ORPHAN SEGMENT]  Name: \"" + segmentByName[segKeys[k]].name + "\""
+        + "  |  ID: " + segmentByName[segKeys[k]].id
+        + "  |  -- NO POD IN COLUMN B MAPS HERE --"
+      );
+    }
+  }
+
+  // -- Step 4: Print the full reconciliation report -------------------------
+  Logger.log("==========================================================");
+  Logger.log("SEGMENT RECONCILIATION REPORT");
+  Logger.log("==========================================================");
+
+  Logger.log("\n--- MATCHED (" + matchedRows.length + ") ---");
+  if (matchedRows.length === 0) {
+    Logger.log("  (none)");
+  } else {
+    matchedRows.forEach(function(line) { Logger.log(line); });
+  }
+
+  Logger.log("\n--- UNMATCHED PODs (" + unmatchedRows.length + ") ---");
+  if (unmatchedRows.length === 0) {
+    Logger.log("  (none -- all PODs with Column B values resolved successfully)");
+  } else {
+    unmatchedRows.forEach(function(line) { Logger.log(line); });
+  }
+
+  Logger.log("\n--- ORPHAN SENDGRID SEGMENTS (" + orphanRows.length + ") ---");
+  if (orphanRows.length === 0) {
+    Logger.log("  (none -- every SendGrid segment has at least one POD mapped to it)");
+  } else {
+    orphanRows.forEach(function(line) { Logger.log(line); });
+  }
+
+  Logger.log("\n==========================================================");
+  Logger.log("SUMMARY: " + matchedRows.length + " matched | "
+    + unmatchedRows.length + " unmatched PODs | "
+    + orphanRows.length + " orphan segments");
+  Logger.log("==========================================================");
+}
+
+// ===========================================================================
+// STATUSCAST GROUP DIAGNOSTICS
+// ===========================================================================
+function debugStatusCastGroups() {
+  var scriptProperties = PropertiesService.getScriptProperties();
+  var rawApiKey  = scriptProperties.getProperty('StatusCastProdTrustAPIKey');
+  var fullDomain = scriptProperties.getProperty('StatusCastPageID');
+  if (!rawApiKey || !fullDomain) {
+    Logger.log('ERROR: StatusCastProdTrustAPIKey or StatusCastPageID not set.');
+    return;
+  }
+
+  var apiKey             = String(rawApiKey).trim();
+  var authorizationValue = (apiKey.toLowerCase().indexOf("bearer ") === 0)
+    ? apiKey
+    : "Bearer " + apiKey;
+
+  var url = "https://" + String(fullDomain).trim() + "/api/v4/groups";
+  var response = UrlFetchApp.fetch(url, {
+    method:             "post",
+    headers:            { Authorization: authorizationValue, accept: "application/json", "Content-Type": "application/json" },
+    payload:            JSON.stringify({}),
+    muteHttpExceptions: true
+  });
+
+  Logger.log("HTTP " + response.getResponseCode());
+  var body = JSON.parse(response.getContentText());
+  var groups = body.items || [];
+  Logger.log("Total groups: " + groups.length);
+  for (var i = 0; i < groups.length; i++) {
+    Logger.log("  [" + groups[i].id + "] " + groups[i].name);
+  }
+}
+
+function debugCheckGroupProperties() {
+  var props = PropertiesService.getScriptProperties();
+  Logger.log("US: [" + props.getProperty('StatusCastGroupUS') + "]");
+  Logger.log("EU: [" + props.getProperty('StatusCastGroupEU') + "]");
+  Logger.log("AP: [" + props.getProperty('StatusCastGroupAP') + "]");
+
 }
