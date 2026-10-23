@@ -1,0 +1,2264 @@
+
+
+<script>
+  // -------------------------------------------------------------------
+  // GLOBAL STATE
+  // -------------------------------------------------------------------
+  var globalIndividualPods    = [];
+  var podMetadataMap          = {};
+  var activeRegions           = [];
+  var activeReleases          = [];
+  var activeProducts          = [];
+  var activeUpgradeModes      = [];
+  var globalTemplatesRegistry = [];
+  // P4-04: Persisted optional block selection for Maintenance templates.
+  // Values: 'block1' | 'block2' | '' (none selected)
+  // Reset only by executeFormReset(). Survives template switches.
+  var activeOptionalBlockKey  = '';
+  // Region Only Segment Picker: when true, submitData() replaces
+  // send_to.segment_ids on the server with Regional SendGrid Segment Ids
+  // (POD Profiles Column L) instead of POD-group segment names. Reset by
+  // renderRegionSegmentToggle() on template switch and by
+  // executeFormReset() on Clear Form.
+  //
+  // PHASE 4 FIX (Region + Vault gate, Column B fallback):
+  //   Confirmed use case (verbatim): "If Region is selected and Product =
+  //   Vault, then SendGrid Segment IDs = Col L, else SendGrid Segment ID =
+  //   Col B." The regional-segment-name path (Column L) only ever applies
+  //   when ALL THREE are true for a checked POD: a Region filter is
+  //   actively selected (activeRegions.length > 0), the POD's Product is
+  //   Vault, and its Column B value matches the "Vault-GR" pattern
+  //   specifically. Without an active Region selection, every POD resolves
+  //   via Column B, even a Vault-GR one. Non-Vault products (LIMS, RegOne,
+  //   Safety) always resolve via their own Column B segment name, even when
+  //   a region is selected. See isVaultRegionalPod() below and the
+  //   submitData() REGION ONLY MODE block, which also falls back a
+  //   qualifying Vault-GR POD to its own Column B value when Column L is
+  //   blank instead of dropping it from the send entirely.
+  //
+  //   IMPORTANT -- this Vault gate is scoped to SendGrid segment targeting
+  //   ONLY (which column a POD's recipients resolve through). It is a
+  //   separate concern from the checklist's auto-check convenience logic in
+  //   evaluateReleaseTypeContext() and executeMacroSelection(), which stays
+  //   GR-only and product-agnostic (the original /GR/i.test(data-pod-group)
+  //   test) -- that logic only decides which PODs get swept into the
+  //   checklist by clicking Region/Product alone vs. needing an explicit
+  //   Release click. Applying isVaultRegionalPod() there too was tried and
+  //   reverted: it broke LIMS/RegOne/Safety entirely, since clicking a
+  //   non-Vault Product button alone would then never auto-populate any
+  //   PODs without also clicking an explicit Release filter.
+  var regionOnlyModeActive = false;
+
+  // -------------------------------------------------------------------
+  // DEBOUNCE UTILITY
+  // Prevents rapid oninput keystrokes from firing concurrent
+  // google.script.run calls. All keystroke-driven paths call
+  // debouncedPreview() instead of updatePreview() directly.
+  // Dropdown/checkbox changes are instant and call updatePreview() direct.
+  // -------------------------------------------------------------------
+  var _previewDebounceTimer = null;
+
+  function debouncedPreview() {
+    if (_previewDebounceTimer) {
+      clearTimeout(_previewDebounceTimer);
+    }
+    _previewDebounceTimer = setTimeout(function() {
+      _previewDebounceTimer = null;
+      updatePreview();
+    }, 400);
+  }
+
+  function initApp() { }
+
+  // -------------------------------------------------------------------
+  // TEMPLATE DROPDOWN
+  // -------------------------------------------------------------------
+  function populateDynamicTemplatesDropdown(response) {
+    var selector = document.getElementById('releaseType');
+    if (!selector) return;
+    if (!response) { alert("System Error: Empty response from spreadsheet server."); return; }
+    if (response.status !== 'success') { alert("Spreadsheet Configuration Error:\n\n" + response.message); return; }
+    globalTemplatesRegistry = response.templates || [];
+    selector.innerHTML = globalTemplatesRegistry.map(function(t) {
+      return '<option value="' + t.key + '">' + t.label + '</option>';
+    }).join('');
+    evaluateReleaseTypeContext();
+  }
+
+
+function resolveActiveNotesUrl(activeMatch) {
+  var link = activeMatch ? (activeMatch.notesUrl || activeMatch.releaseNotesLink) : null;
+  if (link && String(link).toLowerCase() !== "false") {
+    return String(link).trim();
+  }
+  return "https://vaulthelp.veeva.com";
+}
+
+
+ function evaluateReleaseTypeContext() {
+    var typeSelect     = document.getElementById('releaseType');
+    var upgradeSection = document.getElementById('upgradeModeFilterSection');
+    var subjectInput   = document.getElementById('subjectLine');
+    var titleInput     = document.getElementById('emailTitle');
+    var notesField     = document.getElementById('emailNotes');
+
+
+    if (!typeSelect || !globalTemplatesRegistry || globalTemplatesRegistry.length === 0) return;
+    var currentKey  = typeSelect.value;
+    var activeMatch = globalTemplatesRegistry.find(function(t) { return t.key === currentKey; });
+    if (!activeMatch) return;
+
+    var labelText        = activeMatch.label ? String(activeMatch.label) : "";
+    var requiresDowntime = (activeMatch.requiresDowntime === true);
+
+    if (titleInput) {
+      // PHASE 5 FIX: Email Title had no [[PRODUCT]] resolution at all (the
+      // Subject Line got this fix in Phase 4, but the Title field was
+      // missed) -- it was showing the literal unresolved token text to the
+      // user whenever the sheet's Default_Title contained [[PRODUCT]].
+      var rawTitle = activeMatch.Default_Title || activeMatch.default_title || activeMatch.title || "";
+      titleInput.value = rawTitle.replace(/\[\[PRODUCT\]\]/gi, resolveActiveProductToken());
+    }
+
+    // MOVED UP: Pre-fill Release Version from the template's defaultVersion
+    // registry value BEFORE the subject line is assembled below. Subject
+    // assembly reads the releaseVersion field directly, so this must run
+    // first or the subject will be built from the previous template's
+    // stale version value. Only overwrites when the template has a
+    // non-blank defaultVersion stored; leaving it blank in Template Studio
+    // preserves the user's current value.
+    var versionInputEl = document.getElementById('releaseVersion');
+    if (versionInputEl && activeMatch.defaultVersion && String(activeMatch.defaultVersion).trim() !== "") {
+      versionInputEl.value = String(activeMatch.defaultVersion).trim();
+    }
+
+    if (subjectInput) {
+      // PHASE 4 FIX: subject assembly is entirely client-owned (SendGridApi.gs
+      // sends formData.subjectLine as-is, no server-side processing) -- so
+      // [[PRODUCT]] resolution has to happen here, not just in
+      // EmailRenderer.gs. Previously the hardcoded fallback literally baked
+      // in the word "Vault" with no token at all, and even when
+      // Default_Subject in the sheet DID contain [[PRODUCT]], nothing ever
+      // replaced it client-side.
+      var resolvedProductForSubject = resolveActiveProductToken();
+      var rawSubject          = activeMatch.Default_Subject || activeMatch.default_subject || activeMatch.subject || ("Veeva " + resolvedProductForSubject + " Maintenance Release Notification");
+      rawSubject               = rawSubject.replace(/\[\[PRODUCT\]\]/gi, resolvedProductForSubject);
+      var currentVersionValue = document.getElementById('releaseVersion') ? document.getElementById('releaseVersion').value : "26R1.0.22";
+      var shortVersion        = currentVersionValue.substring(0, 4);
+      if (rawSubject.indexOf("[[VERSION]]") !== -1 || rawSubject.indexOf("[[version]]") !== -1) {
+        subjectInput.value = rawSubject.replace(/\[\[VERSION\]\]/gi, shortVersion);
+      } else {
+        subjectInput.value = rawSubject.trim() + " - " + currentVersionValue.trim();
+      }
+    }
+
+    if (notesField) notesField.value = activeMatch.rawNotes || "";
+    
+
+    var staggeredWrapper = document.getElementById('staggeredWindowWrapper');
+    var staggeredInput   = document.getElementById('staggeredWindowHours');
+    if (staggeredWrapper && staggeredInput) {
+      if (requiresDowntime && activeMatch.staggeredWindowHours && activeMatch.staggeredWindowHours > 0) {
+        staggeredWrapper.style.display = "block";
+        staggeredInput.value = activeMatch.staggeredWindowHours;
+      } else {
+        staggeredWrapper.style.display = "none";
+        staggeredInput.value = "0";
+      }
+    }
+
+    var downtimeWrapper = document.getElementById('downtimeInputWrapper');
+    var durationLabel   = document.getElementById('estimatedDurationLabel');
+    var downtimeInput   = document.getElementById('estimatedDowntime');
+    var isMaintenance   = /maintenance/i.test(currentKey) || /maintenance/i.test(labelText);
+    var showDuration    = requiresDowntime || isMaintenance;
+
+    if (downtimeWrapper) downtimeWrapper.style.display = showDuration ? "block" : "none";
+    if (durationLabel)   durationLabel.textContent = isMaintenance
+      ? "Estimated Duration"
+      : "Estimated Vault Downtime";
+
+    if (downtimeInput && activeMatch && activeMatch.defaultDowntime) {
+      downtimeInput.value = String(activeMatch.defaultDowntime).trim();
+    } else if (downtimeInput && isMaintenance) {
+      downtimeInput.value = "90 Minutes";
+    }
+
+    if (requiresDowntime) {
+      if (upgradeSection) upgradeSection.style.display = "flex";
+    } else {
+      if (upgradeSection) upgradeSection.style.display = "none";
+      activeUpgradeModes = [];
+      [].slice.call(document.querySelectorAll('#upgradeModeButtonCluster .macro-filter-btn')).forEach(function(btn) {
+        btn.classList.remove('active');
+      });
+      var boxes = document.querySelectorAll('.pod-box');
+      if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
+        boxes.forEach(function(cb) { cb.checked = false; });
+        updateMasterCheckboxState();
+      }
+    }
+
+    var classicBtn = document.getElementById('btn-UPGRADEMODE-Classic');
+    var vbvBtn     = document.getElementById('btn-UPGRADEMODE-VBV');
+
+    if (classicBtn && vbvBtn) {
+      if (!requiresDowntime) {
+        classicBtn.disabled = true;
+        vbvBtn.disabled     = true;
+        classicBtn.classList.remove('active');
+        vbvBtn.classList.remove('active');
+        classicBtn.style.opacity = "0.4";
+        vbvBtn.style.opacity     = "0.4";
+      } else {
+        classicBtn.disabled = false;
+        vbvBtn.disabled     = false;
+        classicBtn.style.opacity = "1";
+        vbvBtn.style.opacity     = "1";
+        classicBtn.classList.remove('active');
+        vbvBtn.classList.remove('active');
+
+        if (/classic/i.test(labelText) || /classic/i.test(currentKey)) {
+          activeUpgradeModes = ['Classic'];
+          classicBtn.classList.add('active');
+          vbvBtn.disabled      = true;
+          vbvBtn.style.opacity = "0.4";
+          if (downtimeInput) downtimeInput.value = activeMatch.defaultDowntime || "Up to 4 Hours";
+        } else if (/vbv/i.test(labelText) || /vbv/i.test(currentKey)) {
+          activeUpgradeModes = ['VBV'];
+          vbvBtn.classList.add('active');
+          classicBtn.disabled      = true;
+          classicBtn.style.opacity = "0.4";
+          if (downtimeInput) downtimeInput.value = activeMatch.defaultDowntime || "10 Minutes";
+        } else {
+          activeUpgradeModes = [];
+          if (downtimeInput) downtimeInput.value = activeMatch.defaultDowntime || "90 Minutes";
+        }
+      }
+
+      var boxes = document.querySelectorAll('.pod-box');
+      boxes.forEach(function(cb) {
+        var boxUpgradeMode = cb.getAttribute('data-upgrade-mode') ? cb.getAttribute('data-upgrade-mode').toLowerCase().trim() : "";
+        if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
+          cb.checked = false;
+        } else {
+          var matchRegion      = activeRegions.length === 0      || activeRegions.indexOf(cb.getAttribute('data-region')) !== -1;
+          var matchRelease     = activeReleases.length === 0     || activeReleases.indexOf(cb.getAttribute('data-release')) !== -1;
+          var matchProduct     = activeProducts.length === 0     || activeProducts.indexOf(cb.getAttribute('data-product')) !== -1;
+          var matchUpgradeMode = activeUpgradeModes.length === 0 || activeUpgradeModes.some(function(mode) { return mode.toLowerCase().trim() === boxUpgradeMode; });
+
+          // REGION ONLY: see matching comment in executeMacroSelection().
+          // NOTE: this auto-check convenience test is intentionally GR-only
+          // and product-agnostic -- it only decides which PODs get swept in
+          // by region/product/upgrade-mode alone vs. needing an explicit
+          // release click. It is a separate concern from SendGrid segment
+          // targeting (Column L vs Column B), which IS Vault-gated via
+          // isVaultRegionalPod() -- that gate is applied only in
+          // submitData(), not here. Reusing it here would mean clicking a
+          // non-Vault Product button (LIMS/RegOne/Safety) alone never
+          // auto-populates any PODs, since an explicit Release filter would
+          // then always be required too -- a regression from the original
+          // click-count behavior for non-Vault products.
+          if (regionOnlyModeActive) {
+            var isGrPod = /GR/i.test(cb.getAttribute('data-pod-group') || '');
+            var matchReleaseExplicit = activeReleases.length > 0 && activeReleases.indexOf(cb.getAttribute('data-release')) !== -1;
+            cb.checked = isGrPod
+              ? (matchRegion && matchProduct && matchUpgradeMode)
+              : (matchRegion && matchProduct && matchUpgradeMode && matchReleaseExplicit);
+          } else {
+            cb.checked = matchRegion && matchRelease && matchProduct && matchUpgradeMode;
+          }
+        }
+      });
+      updateMasterCheckboxState();
+    }
+
+    renderOptionalBlockGroup(activeMatch);
+    renderRegionSegmentToggle(activeMatch);
+    renderChecklistOptions();
+    calculateMatrixSelections();
+}
+
+  // -------------------------------------------------------------------
+  // P4-04: OPTIONAL BLOCK RADIO GROUP
+  // Renders or hides the mutually exclusive optional block radio group
+  // in the Comm Generator form pane.
+  // Called by evaluateReleaseTypeContext() on every template switch.
+  // The section container (id: optionalBlockSection) is always present
+  // in the DOM (defined in Index.html); this function only shows/hides
+  // it and refreshes the radio labels and state from the registry.
+  // -------------------------------------------------------------------
+  function renderOptionalBlockGroup(activeMatch) {
+    var section = document.getElementById('optionalBlockSection');
+    if (!section) return;
+
+    var templateKey = activeMatch ? (activeMatch.key || '') : '';
+    var isMaint     = /maintenance/i.test(templateKey) && !(activeMatch && activeMatch.requiresDowntime);
+
+    if (!isMaint) {
+      section.style.display = 'none';
+      return;
+    }
+
+    // Populate labels from the registry.
+    var label1El = document.getElementById('optBlockLabel1');
+    var label2El = document.getElementById('optBlockLabel2');
+    var lbl1     = (activeMatch && activeMatch.optionalBlock1Label) ? activeMatch.optionalBlock1Label : 'Optional Block 1';
+    var lbl2     = (activeMatch && activeMatch.optionalBlock2Label) ? activeMatch.optionalBlock2Label : 'Optional Block 2';
+    if (label1El) label1El.textContent = lbl1;
+    if (label2El) label2El.textContent = lbl2;
+
+    // Restore persisted radio state.
+    var radioNone   = document.getElementById('optBlock_none');
+    var radioBlock1 = document.getElementById('optBlock_block1');
+    var radioBlock2 = document.getElementById('optBlock_block2');
+    if (radioNone)   radioNone.checked   = (activeOptionalBlockKey === '');
+    if (radioBlock1) radioBlock1.checked = (activeOptionalBlockKey === 'block1');
+    if (radioBlock2) radioBlock2.checked = (activeOptionalBlockKey === 'block2');
+
+    section.style.display = 'block';
+  }
+
+  // Handler called by radio button onchange in Index.html.
+  // Calls updatePreview() directly for instant feedback in addition to
+  // debouncedPreview() which would also fire after 400ms. The direct call
+  // ensures the preview pane updates the moment a radio is selected without
+  // the user needing to interact with any other field.
+  function selectOptionalBlock(value) {
+    activeOptionalBlockKey = value;
+    updatePreview();
+  }
+
+  // -------------------------------------------------------------------
+  // PHASE 4 FIX: REGION + VAULT REGIONAL-SEGMENT GATE
+  // Test for "does this checked POD's SendGrid recipient targeting go
+  // through the Column L regional segment name, or does it fall back to
+  // its own Column B segment name." Used ONLY by submitData() (the REGION
+  // ONLY MODE block) to classify checked PODs at submit time.
+  //
+  // Confirmed business rule (use case, verbatim): "If Region is selected
+  // and Product = Vault, then SendGrid Segment IDs = Col L, else SendGrid
+  // Segment ID = Col B." Three conditions, all required, to use Column L:
+  //   1) A Region filter is actively selected (activeRegions.length > 0).
+  //      Without an active Region selection, EVERY POD resolves via
+  //      Column B, even a Vault POD that would otherwise qualify.
+  //   2) The POD's Product is Vault.
+  //   3) The POD's Column B value matches the "Vault-GR" pattern
+  //      specifically (not a bare "GR" substring) -- by data convention,
+  //      every Vault-GR Column B value has a corresponding Column L
+  //      (Regional Segment Name) value populated. A Vault POD whose
+  //      Column B does not match "Vault-GR" (e.g. a Vault Limited or
+  //      Prerelease POD) still falls back to Column B, same as any
+  //      non-Vault product (LIMS, RegOne, Safety) does.
+  //
+  // NOT used by evaluateReleaseTypeContext() or executeMacroSelection() --
+  // those two intentionally keep their own separate, broader /GR/i.test
+  // (data-pod-group) test for a different purpose (auto-checking boxes
+  // when Region/Product buttons are clicked, independent of which
+  // SendGrid column eventually resolves the recipients). Reusing this
+  // stricter gate there was tried and reverted: it made clicking a
+  // non-Vault Product button alone (LIMS/RegOne/Safety) stop
+  // auto-populating any PODs, since an explicit Release filter would then
+  // always be required too. Keep these two tests separate.
+  // -------------------------------------------------------------------
+  function isVaultRegionalPod(cb) {
+    var podGroup         = cb.getAttribute('data-pod-group') || '';
+    var product          = cb.getAttribute('data-product')   || '';
+    var isVaultGrPattern = /Vault-GR/i.test(podGroup);
+    var isVaultProduct   = (product === 'Vault');
+    var regionSelected   = (activeRegions.length > 0);
+    return regionSelected && isVaultProduct && isVaultGrPattern;
+  }
+
+  // -------------------------------------------------------------------
+  // REGION ONLY SEGMENT PICKER
+  // Shows/hides the Region Only checkbox based on the active template's
+  // Column Q flag (allowsRegionSegment, read in DataAccess.gs
+  // getSpreadsheetTemplatesConfig). Only templates with that flag set in
+  // Template Studio ever expose this control -- the backend
+  // (processPushRequest in SendGridApi.gs) does not re-check template
+  // type, so this client-side gate is the only enforcement point.
+  // Called by evaluateReleaseTypeContext() on every template switch.
+  // -------------------------------------------------------------------
+  function renderRegionSegmentToggle(activeMatch) {
+    var wrapper = document.getElementById('regionSegmentSection');
+    var toggle  = document.getElementById('regionOnlyToggle');
+    if (!wrapper) return;
+
+    // HARDCODE: template key "maintenance" (Maintenance Template - Downtime
+    // Only) always targets via the Regional Segment. The Recipient
+    // Targeting checkbox/panel is never shown for this template, and
+    // Region Only mode is forced on instead of left for the user to opt
+    // into. This is a deliberate string match against the template's
+    // Column A key -- NOT the allowsRegionSegment flag below, which still
+    // governs every other template exactly as before. If a similar
+    // template is ever cloned from this one, give it its own distinct key
+    // (for example "maintenance_newtemplate") -- it will NOT inherit this
+    // forced behavior unless added here explicitly.
+    if (activeMatch && activeMatch.key === 'maintenance') {
+      wrapper.style.display = 'none';
+      regionOnlyModeActive  = true;
+      if (toggle) toggle.checked = true;
+      updateGeneralButtonState();
+      return;
+    }
+
+    var allowed = !!(activeMatch && activeMatch.allowsRegionSegment === true);
+
+    if (!allowed) {
+      wrapper.style.display = 'none';
+      regionOnlyModeActive = false;
+      if (toggle) toggle.checked = false;
+      updateGeneralButtonState();
+      return;
+    }
+
+    wrapper.style.display = 'block';
+    updateGeneralButtonState();
+  }
+
+  // Handler called by the checkbox's onchange in Index.html.
+  function toggleRegionOnlyMode(checkboxEl) {
+    regionOnlyModeActive = !!(checkboxEl && checkboxEl.checked);
+    updateGeneralButtonState();
+  }
+
+  // -------------------------------------------------------------------
+  // REGION ONLY: GENERAL RELEASE FILTER BUTTON GATE
+  // When Region Only targeting is active, every General Release ("GR")
+  // POD in the selected region(s) is already covered by the checklist's
+  // GR auto-check behavior (see the GR-only, product-agnostic test in
+  // executeMacroSelection() / evaluateReleaseTypeContext()) -- individually
+  // selecting General Release PODs via the bulk filter button adds nothing.
+  // Note: this button's disabled state is product-agnostic by design, same
+  // as the auto-check test it mirrors -- it is a DIFFERENT, narrower gate
+  // than the Vault-only SendGrid segment targeting in submitData() (see
+  // isVaultRegionalPod()), which decides Column L vs Column B at submit
+  // time, not which boxes get auto-checked here.
+  // Disabling the button (same pattern already used for the Early button
+  // under Maintenance-only templates) prevents redundant bulk-selection
+  // and purges any stale 'General' filter state so it cannot silently
+  // keep filtering the checklist. This does NOT uncheck any already-
+  // checked individual POD boxes -- only the bulk filter button and the
+  // activeReleases filter state are affected.
+  // Called by toggleRegionOnlyMode() (immediate effect), by
+  // renderRegionSegmentToggle() (template-switch-driven resets), by
+  // executeFormReset() (Clear Form), and defensively by
+  // renderChecklistOptions() on every render pass.
+  // -------------------------------------------------------------------
+  function updateGeneralButtonState() {
+    var generalBtn = document.getElementById('btn-RELEASE-General');
+    if (!generalBtn) return;
+
+    if (regionOnlyModeActive) {
+      generalBtn.disabled      = true;
+      generalBtn.title         = 'General Release PODs are already included via the Regional Segment Name when Region Only is active';
+      generalBtn.style.opacity = '0.4';
+      generalBtn.style.cursor  = 'not-allowed';
+      var generalIdx = activeReleases.indexOf('General');
+      if (generalIdx !== -1) {
+        activeReleases.splice(generalIdx, 1);
+        generalBtn.classList.remove('active');
+      }
+    } else {
+      generalBtn.disabled      = false;
+      generalBtn.title         = '';
+      generalBtn.style.opacity = '1';
+      generalBtn.style.cursor  = 'pointer';
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // UTILITIES
+  // -------------------------------------------------------------------
+  function naturalSort(a, b) {
+    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+  }
+
+  function getSafeValue(id, fallback) {
+    var el = document.getElementById(id);
+    return el ? el.value : fallback;
+  }
+
+  // TIMEZONE FIX: shared Pacific-time resolver.
+  // Finds the actual UTC instant whose America/Los_Angeles representation
+  // matches the Pacific wall-clock digits supplied, instead of assuming a
+  // fixed +7 (PDT) or +8 (PST) hour offset. A fixed offset is only correct
+  // for half the year -- this mirrors the DST-correction loop already used
+  // server-side in TimeUtil.gs's calculateTimezones(), so every PT instant
+  // computed in this file goes through one shared, correct implementation
+  // instead of each call site guessing its own offset.
+  function resolvePacificUtcMs(year, month, day, hour, minute) {
+    var targetMs = Date.UTC(year, month, day, hour, minute);
+
+    for (var i = 0; i < 3; i++) {
+      var ptParts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles',
+        year:     'numeric',
+        month:    'numeric',
+        day:      'numeric',
+        hour:     'numeric',
+        minute:   'numeric',
+        hour12:   false
+      }).formatToParts(new Date(targetMs));
+
+      var ptMap = {};
+      for (var p = 0; p < ptParts.length; p++) {
+        ptMap[ptParts[p].type] = ptParts[p].value;
+      }
+
+      var ptHour = Number(ptMap.hour) === 24 ? 0 : Number(ptMap.hour);
+      var ptMs   = Date.UTC(
+        Number(ptMap.year),
+        Number(ptMap.month) - 1,
+        Number(ptMap.day),
+        ptHour,
+        Number(ptMap.minute)
+      );
+
+      var diff = ptMs - Date.UTC(year, month, day, hour, minute);
+      if (diff === 0) break;
+      targetMs = targetMs - diff;
+    }
+
+    return targetMs;
+  }
+
+  // PHASE 4 FIX: PRODUCT TOKEN RESOLUTION
+  // Resolves the single product name sent to the server as formData.product,
+  // which generateMasterHtmlLayout() (EmailRenderer.gs) substitutes into the
+  // [[PRODUCT]] token in htmlUpper/htmlLower/optional-block content and into
+  // the "What:" line. Business rule: if exactly one Product filter button is
+  // active, use that product name; if none or more than one is active, the
+  // email defaults to "Vault" (there is no single product to name). This was
+  // previously computed as activeProductFilters inside calculateMatrixSelections()
+  // but never actually sent to the server in either updatePreview() or
+  // submitData() -- the server-side [[PRODUCT]] replacement already existed
+  // and always silently fell back to "Vault" because formData.product was
+  // never populated client-side. This function is the single source of truth
+  // for that value going forward; call it at the point each formDataPayload
+  // object is built so it always reflects the current button state.
+  function resolveActiveProductToken() {
+    var activeProductBtns = [];
+    ['Vault', 'LIMS', 'RegOne', 'Safety'].forEach(function(prod) {
+      var btn = document.getElementById('btn-PRODUCT-' + prod);
+      if (btn && btn.classList.contains('active')) activeProductBtns.push(prod);
+    });
+    return (activeProductBtns.length === 1) ? activeProductBtns[0] : 'Vault';
+  }
+
+ function formatFriendlyDate() {
+  var el = document.getElementById('dateTime');
+  if (!el || !el.value) return;
+
+  var input  = el.value;
+  var tokens = input.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!tokens) return;
+
+  var year   = Number(tokens[1]);
+  var month  = Number(tokens[2]) - 1;
+  var day    = Number(tokens[3]);
+  var hour   = Number(tokens[4]);
+  var minute = Number(tokens[5]);
+
+  var isoEl = document.getElementById('isoStringValue');
+  if (isoEl) isoEl.value = tokens[1] + tokens[2] + tokens[3] + 'T' + tokens[4] + tokens[5];
+
+  // Anchor the typed digits as UTC so toLocaleString never reinterprets
+  // them through the browser's own local timezone. The value typed here
+  // is already intended to be Pacific wall-clock time, so the displayed
+  // weekday/month/day/hour must always equal exactly what was typed.
+  var displayDate = new Date(Date.UTC(year, month, day, hour, minute));
+
+  var displayOptions = {
+    timeZone: 'UTC',
+    weekday:  'long',
+    month:    'long',
+    day:      'numeric',
+    hour:     'numeric',
+    minute:   '2-digit'
+  };
+  var friendlyText = displayDate.toLocaleString('en-US', displayOptions).replace(',', '');
+
+  // Resolve PST vs PDT for this specific calendar date instead of
+  // hardcoding one. Checks the long timezone name for America/Los_Angeles
+  // at midday UTC on the same calendar date, which is safely inside
+  // daytime hours under both PST and PDT offsets.
+  var noonCheckDate = new Date(Date.UTC(year, month, day, 20, 0));
+  var laNameParts   = new Intl.DateTimeFormat('en-US', {
+    timeZone:     'America/Los_Angeles',
+    timeZoneName: 'long'
+  }).formatToParts(noonCheckDate);
+
+  var laLongName = '';
+  for (var i = 0; i < laNameParts.length; i++) {
+    if (laNameParts[i].type === 'timeZoneName') laLongName = laNameParts[i].value;
+  }
+  var tzAbbreviation = (laLongName.toLowerCase().indexOf('daylight') !== -1
+                     || laLongName.toLowerCase().indexOf('summer')   !== -1)
+                     ? 'PDT' : 'PST';
+
+  var friendlyEl = document.getElementById('friendlyDate');
+  if (friendlyEl) friendlyEl.value = friendlyText + ' ' + tzAbbreviation;
+
+  calculateMatrixSelections();
+}
+
+  function inputVersionOverride() {
+    var typeSelect   = document.getElementById('releaseType');
+    var subjectInput = document.getElementById('subjectLine');
+    var versionInput = document.getElementById('releaseVersion');
+    var titleInput   = document.getElementById('emailTitle');
+    if (!subjectInput || !versionInput) return;
+
+    var shortVersion = versionInput.value.substring(0, 4);
+    var rawSubject   = "";
+    var rawTitle     = "";
+
+    if (typeSelect && globalTemplatesRegistry && globalTemplatesRegistry.length > 0) {
+      var currentKey  = typeSelect.value;
+      var activeMatch = globalTemplatesRegistry.find(function(t) { return t.key === currentKey; });
+      if (activeMatch) {
+        rawSubject = activeMatch.Default_Subject || activeMatch.subject || "";
+        rawTitle   = activeMatch.Default_Title || activeMatch.default_title || activeMatch.title || "";
+      }
+    }
+
+    if (!rawSubject) {
+      rawSubject = subjectInput.value.replace(/\s*-\s*\b\d{2}R\d{1}(\.\d+)*\b.*/g, "");
+    }
+
+    // PHASE 5 FIX: resolve [[PRODUCT]] from the PRISTINE registry source
+    // (activeMatch.Default_Subject / Default_Title) every time this runs,
+    // not from whatever is already sitting in the field. Regex-replacing
+    // the field's current value was the earlier (broken) approach: the
+    // very first resolution overwrites [[PRODUCT]] with a literal word
+    // (e.g. "Vault"), permanently destroying the token, so every later
+    // Product click found nothing left to replace and the field went stale
+    // (reported: Title stuck on "Vault" even after +Safety was clicked).
+    // Re-deriving from the registry each time guarantees the token is
+    // always available to re-resolve, no matter how many times the user
+    // has already switched products.
+    var resolvedProduct = resolveActiveProductToken();
+    rawSubject = rawSubject.replace(/\[\[PRODUCT\]\]/gi, resolvedProduct);
+
+    if (rawSubject.indexOf("[[VERSION]]") !== -1 || rawSubject.indexOf("[[version]]") !== -1) {
+      subjectInput.value = rawSubject.replace(/\[\[VERSION\]\]/gi, shortVersion);
+    } else {
+      subjectInput.value = rawSubject.trim() + " - " + versionInput.value.trim();
+    }
+
+    if (titleInput) {
+      // No registry match found (templates not loaded yet) -- fall back to
+      // a non-destructive swap on the field's current value, same safety
+      // net the subject fallback above uses.
+      if (!rawTitle) rawTitle = titleInput.value;
+      titleInput.value = rawTitle.replace(/\[\[PRODUCT\]\]/gi, resolvedProduct);
+    }
+
+    renderChecklistOptions();
+    debouncedPreview();
+  }
+
+  // -------------------------------------------------------------------
+  // POD DASHBOARD
+  // -------------------------------------------------------------------
+
+  // storeAndInitializeDashboard: builds filter buttons then renders the
+  // checklist. Early button enabled/disabled state is managed entirely
+  // inside renderChecklistOptions(), which is template-aware. Do NOT
+  // disable the Early button here -- it must stay live for GR/VBV/Classic.
+  function storeAndInitializeDashboard(response) {
+    if (!response || response.status !== 'success') return;
+    globalIndividualPods = response.individualPods || [];
+    podMetadataMap       = response.podMetadata    || {};
+    var cleanRegions     = (response.uniqueRegions || []).filter(function(r) { return r !== 'NA'; });
+    var uniqueReleases   = (response.uniqueReleases || []).concat(['Early']);
+    buildFilterButtons('regionButtonCluster',  cleanRegions,   'REGION');
+    buildFilterButtons('releaseButtonCluster', uniqueReleases, 'RELEASE');
+    buildFilterButtons('productButtonCluster', response.uniqueProducts || [], 'PRODUCT');
+    renderChecklistOptions();
+  }
+
+  function buildFilterButtons(containerId, items, macroType) {
+    var cluster = document.getElementById(containerId);
+    if (!cluster) return;
+    cluster.innerHTML = items.map(function(item) {
+      return '<button type="button" id="btn-' + macroType + '-' + item + '" class="macro-filter-btn" onclick="executeMacroSelection(\'' + macroType + '\', \'' + item + '\')">+ ' + item + '</button>';
+    }).join('');
+  }
+
+  // renderChecklistOptions: rebuilds the POD checkbox list from scratch.
+  //
+  // EARLY POD BEHAVIOUR (P5-01 fix):
+  //   Maintenance-only templates (no requiresDowntime):
+  //     - Early pods get data-release="General" so the General filter
+  //       button selects them automatically.
+  //     - The Early filter button is disabled and greyed.
+  //     - If "Early" was active in activeReleases it is purged to prevent
+  //       ghost-filtering after a template switch.
+  //
+  //   All other templates (GR/VBV/Classic -- requiresDowntime=true):
+  //     - Early pods keep data-release="Early".
+  //     - The Early filter button is fully enabled.
+  //     - Users can select/deselect Early pods independently.
+  //
+  // This function is called by:
+  //   storeAndInitializeDashboard() -- initial load
+  //   evaluateReleaseTypeContext()  -- every template switch
+  //   inputVersionOverride()        -- version field changes (cycle affects Early detection)
+  function renderChecklistOptions() {
+    var container = document.getElementById('podChecklistContainer');
+    if (!container) return;
+    container.classList.remove('loading-placeholder');
+
+    // PRESERVE SELECTION ACROSS REBUILD: this function replaces the entire
+    // checklist's innerHTML below, which would otherwise silently uncheck
+    // every already-selected POD (for example on every keystroke in the
+    // Release Version field via inputVersionOverride()). Snapshot which
+    // POD values are currently checked before the rebuild, then re-apply
+    // that selection to the freshly rendered checkboxes afterward.
+    var previouslyCheckedPods = {};
+    [].slice.call(container.querySelectorAll('.pod-box:checked')).forEach(function(cb) {
+      previouslyCheckedPods[cb.value] = true;
+    });
+
+    // -- Determine active template type to gate Early merge behaviour. --
+    var currentTemplateKey = document.getElementById('releaseType')
+      ? document.getElementById('releaseType').value
+      : '';
+    var activeMatch = globalTemplatesRegistry.find(function(t) {
+      return t.key === currentTemplateKey;
+    });
+    var isMaintenanceOnly = (
+      /maintenance/i.test(currentTemplateKey) &&
+      !(activeMatch && activeMatch.requiresDowntime)
+    );
+
+    // -- Early filter button state: driven by template type. --
+    // Must be set BEFORE writing data-release into the DOM so the UI
+    // is always consistent with the attribute values rendered below.
+    var earlyBtn = document.getElementById('btn-RELEASE-Early');
+    if (earlyBtn) {
+      if (isMaintenanceOnly) {
+        earlyBtn.disabled      = true;
+        earlyBtn.title         = 'Early pods are included in General release for this template';
+        earlyBtn.style.opacity = '0.4';
+        earlyBtn.style.cursor  = 'not-allowed';
+        // Purge "Early" from activeReleases to prevent ghost-filtering
+        // after switching away from a GR/VBV template where Early was active.
+        var earlyIdx = activeReleases.indexOf('Early');
+        if (earlyIdx !== -1) {
+          activeReleases.splice(earlyIdx, 1);
+          earlyBtn.classList.remove('active');
+        }
+      } else {
+        earlyBtn.disabled      = false;
+        earlyBtn.title         = '';
+        earlyBtn.style.opacity = '1';
+        earlyBtn.style.cursor  = 'pointer';
+      }
+    }
+
+    // -- General button gate: driven by Region Only mode. --
+    updateGeneralButtonState();
+
+    // -- R-cycle digit resolution for cycle-specific Early detection. --
+    // e.g. "26R1.0.22" -> rNum = "1" -> matches -GR-E1 pods only.
+    // Non-cycle Early pods (-GR-E-) always match regardless of version.
+    var versionInput = document.getElementById('releaseVersion');
+    var versionVal   = versionInput ? versionInput.value : '26R1.0.22';
+    var rCycleMatch  = versionVal.match(/R(\d)/i);
+    var rNum         = rCycleMatch ? rCycleMatch[1] : null;
+
+    container.innerHTML = globalIndividualPods.map(function(p) {
+      var meta    = podMetadataMap[p] || {
+        region:      'Unknown',
+        release:     'Unknown',
+        product:     'Unknown',
+        upgradeMode: 'Unknown',
+        podGroup:    '',
+        regionalSegmentName: ''
+      };
+      var inputId  = 'chk-' + p;
+      var podGroup = meta.podGroup || '';
+
+      // Detect Early pods by their Column B segment name pattern.
+      // -GR-E- (no digit) = cycle-agnostic Early (Internal, Agency, etc.)
+      // -GR-E1 / -GR-E2 / -GR-E3 = cycle-specific Early pods
+      var isEarly = rNum
+        ? (new RegExp('-GR-E' + rNum + '\\b', 'i').test(podGroup) || /-GR-E-/i.test(podGroup))
+        : /-GR-E/i.test(podGroup);
+
+      // For Maintenance-only: merge Early into General.
+      // For all other templates: preserve Early as its own release type.
+      var releaseVal;
+      if (isEarly && isMaintenanceOnly) {
+        releaseVal = 'General';
+      } else {
+        releaseVal = isEarly ? 'Early' : (meta.release || 'Unknown');
+      }
+
+      return '<div class="pod-row-item">'
+        + '<input type="checkbox" id="' + inputId + '" class="pod-box" value="' + p + '"'
+        + ' data-region="'          + meta.region          + '"'
+        + ' data-release="'         + releaseVal           + '"'
+        + ' data-product="'         + meta.product         + '"'
+        + ' data-upgrade-mode="'    + meta.upgradeMode     + '"'
+        + ' data-pod-group="'       + podGroup             + '"'
+        + ' data-deployment-time="' + (meta.deploymentTime || '') + '"'
+        + ' data-regional-segment-name="' + (meta.regionalSegmentName || '') + '"'
+        + ' onchange="calculateMatrixSelections(); updatePreview();">'
+        + '<label for="' + inputId + '">' + p + '</label>'
+        + '</div>';
+    }).join('');
+
+    // Re-apply the pre-rebuild selection snapshot to the newly rendered checkboxes.
+    [].slice.call(container.querySelectorAll('.pod-box')).forEach(function(cb) {
+      if (previouslyCheckedPods[cb.value]) cb.checked = true;
+    });
+    updateMasterCheckboxState();
+
+    calculateMatrixSelections();
+  }
+
+  function toggleMasterSelectAll(masterCheckbox) {
+    [].slice.call(document.querySelectorAll('.pod-box')).forEach(function(cb) { cb.checked = masterCheckbox.checked; });
+    calculateMatrixSelections();
+  }
+
+  function updateMasterCheckboxState() {
+    var totalBoxes   = document.querySelectorAll('.pod-box').length;
+    var checkedBoxes = document.querySelectorAll('.pod-box:checked').length;
+    var master       = document.getElementById('masterSelectAll');
+    if (master) {
+      master.checked       = (totalBoxes === checkedBoxes && totalBoxes > 0);
+      master.indeterminate = (checkedBoxes > 0 && checkedBoxes < totalBoxes);
+    }
+  }
+
+  function executeMacroSelection(filterType, attributeValue) {
+    if (filterType === 'REGION') {
+      var idxR = activeRegions.indexOf(attributeValue);
+      if (idxR !== -1) { activeRegions.splice(idxR, 1); document.getElementById("btn-REGION-" + attributeValue).classList.remove('active'); }
+      else { activeRegions.push(attributeValue); document.getElementById("btn-REGION-" + attributeValue).classList.add('active'); }
+    } else if (filterType === 'RELEASE') {
+      var idxRl = activeReleases.indexOf(attributeValue);
+      if (idxRl !== -1) { activeReleases.splice(idxRl, 1); document.getElementById("btn-RELEASE-" + attributeValue).classList.remove('active'); }
+      else { activeReleases.push(attributeValue); document.getElementById("btn-RELEASE-" + attributeValue).classList.add('active'); }
+    } else if (filterType === 'PRODUCT') {
+      var idxP = activeProducts.indexOf(attributeValue);
+      if (idxP !== -1) { activeProducts.splice(idxP, 1); document.getElementById("btn-PRODUCT-" + attributeValue).classList.remove('active'); }
+      else { activeProducts.push(attributeValue); document.getElementById("btn-PRODUCT-" + attributeValue).classList.add('active'); }
+    } else if (filterType === 'UPGRADEMODE') {
+      if (attributeValue === 'Classic') {
+        var vbvIdx = activeUpgradeModes.indexOf('VBV');
+        if (vbvIdx !== -1) activeUpgradeModes.splice(vbvIdx, 1);
+        var vbvBtnEl = document.getElementById('btn-UPGRADEMODE-VBV');
+        if (vbvBtnEl) vbvBtnEl.classList.remove('active');
+      } else if (attributeValue === 'VBV') {
+        var classicIdx = activeUpgradeModes.indexOf('Classic');
+        if (classicIdx !== -1) activeUpgradeModes.splice(classicIdx, 1);
+        var classicBtnEl = document.getElementById('btn-UPGRADEMODE-Classic');
+        if (classicBtnEl) classicBtnEl.classList.remove('active');
+      }
+      var idxU = activeUpgradeModes.indexOf(attributeValue);
+      if (idxU !== -1) {
+        activeUpgradeModes.splice(idxU, 1);
+        document.getElementById("btn-UPGRADEMODE-" + attributeValue).classList.remove('active');
+      } else {
+        activeUpgradeModes.push(attributeValue);
+        document.getElementById("btn-UPGRADEMODE-" + attributeValue).classList.add('active');
+      }
+    }
+
+    if (filterType === 'UPGRADEMODE' && activeUpgradeModes.indexOf(attributeValue) !== -1) {
+      var downtimeInput = document.getElementById('estimatedDowntime');
+      if (downtimeInput) {
+        if (attributeValue === 'Classic') downtimeInput.value = "Up to 4 Hours";
+        else if (attributeValue === 'VBV') downtimeInput.value = "10 Minutes";
+      }
+    }
+
+    var boxes = document.querySelectorAll('.pod-box');
+    if (activeRegions.length === 0 && activeReleases.length === 0 && activeProducts.length === 0 && activeUpgradeModes.length === 0) {
+      boxes.forEach(function(cb) { cb.checked = false; });
+      updateMasterCheckboxState();
+      calculateMatrixSelections();
+      return;
+    }
+
+    boxes.forEach(function(cb) {
+      var boxUpgradeMode     = cb.getAttribute('data-upgrade-mode') ? cb.getAttribute('data-upgrade-mode').toLowerCase().trim() : "";
+      var currentTemplateKey = document.getElementById('releaseType') ? document.getElementById('releaseType').value : "";
+      var selectedTemplate   = globalTemplatesRegistry.find(function(t) { return t.key === currentTemplateKey; });
+      var isMaintenance      = selectedTemplate ? !selectedTemplate.requiresDowntime : true;
+      var matchRegion        = activeRegions.length === 0      || activeRegions.indexOf(cb.getAttribute('data-region')) !== -1;
+      var matchRelease       = activeReleases.length === 0     || activeReleases.indexOf(cb.getAttribute('data-release')) !== -1;
+      var matchProduct       = activeProducts.length === 0     || activeProducts.indexOf(cb.getAttribute('data-product')) !== -1;
+      var matchUpgradeMode   = isMaintenance || activeUpgradeModes.length === 0 || activeUpgradeModes.some(function(mode) { return mode.toLowerCase().trim() === boxUpgradeMode; });
+
+      // REGION ONLY: GR ALWAYS IN, LIMITED/PRERELEASE ONLY WHEN EXPLICITLY
+      // SELECTED. Once Region Only mode is forced on, General Release
+      // ("GR") PODs are routed entirely through the Regional Segment Name
+      // when the POD is Vault (see submitData() / processPushRequest --
+      // that path is Vault-gated via isVaultRegionalPod()) and are always
+      // pulled in by region/product/upgrade-mode alone -- release-type
+      // filters never exclude them. This auto-check convenience test below
+      // is deliberately GR-only and product-agnostic, NOT the same gate as
+      // the Vault-only SendGrid segment targeting: it only decides which
+      // PODs get swept into the checklist by clicking Region/Product alone.
+      // Gating it on Vault as well would mean clicking a non-Vault Product
+      // button (LIMS/RegOne/Safety) alone never auto-populates any PODs,
+      // since an explicit Release filter would then always be required too.
+      // Limited / Prerelease / Early PODs are the opposite: they must NOT
+      // be swept in just because no release-type filter happens to be
+      // active (the normal "empty activeReleases = match everyone" shortcut
+      // is intentionally disabled for them here) -- the user has to
+      // explicitly click +Limited / +Prerelease / +Early to include them.
+      // Every other template keeps the original behavior untouched in the
+      // else branch below.
+      if (regionOnlyModeActive) {
+        var isGrPod = /GR/i.test(cb.getAttribute('data-pod-group') || '');
+        var matchReleaseExplicit = activeReleases.length > 0 && activeReleases.indexOf(cb.getAttribute('data-release')) !== -1;
+        cb.checked = isGrPod
+          ? (matchRegion && matchProduct && matchUpgradeMode)
+          : (matchRegion && matchProduct && matchUpgradeMode && matchReleaseExplicit);
+      } else {
+        cb.checked = matchRegion && matchRelease && matchProduct && matchUpgradeMode;
+      }
+    });
+    updateMasterCheckboxState();
+    calculateMatrixSelections();
+
+    // PHASE 5 FIX: Product filter buttons previously only updated the
+    // checklist/live preview, leaving the Subject Line field stale (it was
+    // only rebuilt on template switch via evaluateReleaseTypeContext() or on
+    // a Release Version edit via inputVersionOverride()). This caused the
+    // reported "Subject is not in alignment" bug: clicking +Safety updated
+    // the title/body/What-line via [[PRODUCT]] token resolution, but the
+    // Subject Line input kept showing the old product. Reusing
+    // inputVersionOverride() here (rather than duplicating subject-assembly
+    // logic) preserves any manually-typed subject text -- it only strips and
+    // reapplies the trailing version suffix and re-resolves [[PRODUCT]] --
+    // which respects WORK PRESERVATION. Applies uniformly to every template,
+    // not just Maintenance Only, per confirmed scope.
+    if (filterType === 'PRODUCT') {
+      inputVersionOverride();
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // MATRIX / AFFECTED PODS COMPILATION
+  // -------------------------------------------------------------------
+  function calculateMatrixSelections() {
+    var textArea = document.getElementById('affectedPods');
+    if (!textArea) return;
+
+    var checkedBoxes = [].slice.call(document.querySelectorAll('.pod-box:checked'));
+    updateMasterCheckboxState();
+
+    if (checkedBoxes.length === 0) { textArea.value = ""; debouncedPreview(); return; }
+
+    var regionalNestedMap = {};
+    checkedBoxes.forEach(function(cb) {
+      var podName = cb.value;
+      var region  = cb.getAttribute('data-region')  || 'Unknown';
+      var release = cb.getAttribute('data-release') || 'Release';
+      if (!regionalNestedMap[region])               regionalNestedMap[region] = {};
+      if (!regionalNestedMap[region][release])      regionalNestedMap[region][release] = {};
+      if (!regionalNestedMap[region][release].pods) regionalNestedMap[region][release].pods = [];
+      regionalNestedMap[region][release].pods.push(podName);
+    });
+
+    var rawDate        = getSafeValue('dateTime', '');
+    var staggeredHours = getSafeValue('staggeredWindowHours', '0');
+
+    var ptStaggeredText   = "";
+    var apacPtLink        = "";
+    var jstStaggeredText  = "";
+    var euPtLink          = "";
+    var cestStaggeredText = "";
+
+    if (rawDate && Number(staggeredHours) > 0) {
+      var parts = rawDate.split(/[-T:]/);
+      if (parts.length >= 5) {
+        var yr = parseInt(parts[0], 10);
+        var mo = parseInt(parts[1], 10) - 1;
+        var dy = parseInt(parts[2], 10);
+        var hr = parseInt(parts[3], 10);
+        var mn = parseInt(parts[4], 10);
+
+        var baseDate = new Date(Date.UTC(yr, mo, dy, hr, mn));
+        var endDate  = new Date(baseDate.getTime() + (Number(staggeredHours) * 60 * 60 * 1000));
+
+        function cleanTimeStr(dateObj, timeZone) {
+          var opts      = { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: timeZone };
+          var partsArr  = new Intl.DateTimeFormat('en-US', opts).formatToParts(dateObj);
+          var hVal      = partsArr.find(function(p) { return p.type === 'hour'; }).value;
+          var mVal      = partsArr.find(function(p) { return p.type === 'minute'; }).value;
+          var dayPeriod = partsArr.find(function(p) { return p.type === 'dayPeriod'; }).value.toLowerCase();
+          if (mVal === "00") {
+            if (hVal === "12" && dayPeriod === "pm") return "noon";
+            if (hVal === "12" && dayPeriod === "am") return "midnight";
+          }
+          return hVal + ":" + mVal + " " + dayPeriod;
+        }
+
+        var baseDayUS   = new Intl.DateTimeFormat('en-US', { day: 'numeric', weekday: 'long', month: 'long', timeZone: 'America/Los_Angeles' }).format(baseDate);
+        var baseDayEU   = new Intl.DateTimeFormat('en-US', { day: 'numeric', weekday: 'long', month: 'long', timeZone: 'Europe/Paris' }).format(baseDate);
+        var baseDayJST  = new Intl.DateTimeFormat('en-US', { day: 'numeric', weekday: 'long', month: 'long', timeZone: 'Asia/Tokyo' }).format(baseDate);
+        var endDayJST   = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone: 'Asia/Tokyo' }).format(endDate);
+        var jstDayContext = baseDayJST;
+        if (baseDayJST.split(' ').pop() !== endDayJST) { jstDayContext = baseDayJST + " into Friday"; }
+
+        var worldClockUrl = "https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&iso=" + rawDate.replace(/[-:]/g, "") + "&sort=1";
+
+        ptStaggeredText   = ' <a href="' + worldClockUrl + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">US between ' + cleanTimeStr(baseDate, 'America/Los_Angeles') + ' and ' + cleanTimeStr(endDate, 'America/Los_Angeles') + ' PDT</a> (' + baseDayUS + ')';
+        apacPtLink        = ' <a href="' + worldClockUrl + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">APAC between ' + cleanTimeStr(baseDate, 'America/Los_Angeles') + ' and ' + cleanTimeStr(endDate, 'America/Los_Angeles') + ' PDT</a>';
+        jstStaggeredText  = ' (' + jstDayContext + ' between ' + cleanTimeStr(baseDate, 'Asia/Tokyo') + ' and ' + cleanTimeStr(endDate, 'Asia/Tokyo') + ' JST)';
+        euPtLink          = ' <a href="' + worldClockUrl + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">EU between ' + cleanTimeStr(baseDate, 'America/Los_Angeles') + ' and ' + cleanTimeStr(endDate, 'America/Los_Angeles') + ' PDT</a>';
+        cestStaggeredText = ' (' + baseDayEU + ' between ' + cleanTimeStr(baseDate, 'Europe/Paris') + ' and ' + cleanTimeStr(endDate, 'Europe/Paris') + ' CEST)';
+      }
+    }
+/////////////////////////////////////////////
+
+    var activeProductFilters = [];
+    ['Vault','LIMS','RegOne','Safety'].forEach(function(prod) {
+      var btn = document.getElementById('btn-PRODUCT-' + prod);
+      if (btn && btn.classList.contains('active')) activeProductFilters.push(prod);
+    });
+    if (activeProductFilters.length === 0) activeProductFilters.push('Vault');
+
+    var targetRegionOrder     = ["US", "EU", "APAC"];
+    var compiledLines         = [];
+    var currentTemplateKey    = document.getElementById('releaseType') ? document.getElementById('releaseType').value : "";
+    var selectedTemplate      = globalTemplatesRegistry.find(function(t) { return t.key === currentTemplateKey; });
+    var isMaintenanceTemplate = selectedTemplate ? !selectedTemplate.requiresDowntime : true;
+
+    if (isMaintenanceTemplate) {
+      targetRegionOrder.forEach(function(regKey) {
+        if (!regionalNestedMap[regKey]) return;
+        Object.keys(regionalNestedMap[regKey]).sort().forEach(function(releaseTypeTag) {
+          var sortedPodNames    = regionalNestedMap[regKey][releaseTypeTag].pods.sort(naturalSort);
+          var displayReleaseTag = releaseTypeTag;
+          if (displayReleaseTag.toLowerCase().indexOf("release") === -1) displayReleaseTag = displayReleaseTag + " Release";
+          compiledLines.push("<u>" + regKey + " " + displayReleaseTag + ":</u> " + sortedPodNames.join(', '));
+        });
+      });
+      Object.keys(regionalNestedMap).forEach(function(regKey) {
+        if (targetRegionOrder.indexOf(regKey) !== -1) return;
+        Object.keys(regionalNestedMap[regKey]).sort().forEach(function(releaseTypeTag) {
+          var sortedPodNames    = regionalNestedMap[regKey][releaseTypeTag].pods.sort(naturalSort);
+          var displayReleaseTag = releaseTypeTag;
+          if (displayReleaseTag.toLowerCase().indexOf("release") === -1) displayReleaseTag = displayReleaseTag + " Release";
+          compiledLines.push("<u>" + regKey + " " + displayReleaseTag + ":</u> " + sortedPodNames.join(', '));
+        });
+      });
+
+    } else {
+      var isVbvTemplate = /vbv/i.test(currentTemplateKey);
+
+      if (isVbvTemplate) {
+        var checkedBoxes2 = [].slice.call(document.querySelectorAll('.pod-box:checked'));
+
+        function parseFormattedTime(timeStr) {
+          if (!timeStr) return null;
+          var match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+          if (!match) return null;
+          var h      = parseInt(match[1], 10);
+          var m      = parseInt(match[2], 10);
+          var period = match[3].toUpperCase();
+          if (period === 'PM' && h !== 12) h += 12;
+          if (period === 'AM' && h === 12) h = 0;
+          var tzSuffix = timeStr.replace(/.*?(AM|PM)/i, '').trim() || 'PDT';
+          return { hours: h, minutes: m, tzSuffix: tzSuffix };
+        }
+
+        function vbvFmtTime(d, tz) {
+          var opts   = { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz };
+          var parts2 = new Intl.DateTimeFormat('en-US', opts).formatToParts(d);
+          var hv     = parts2.find(function(p) { return p.type === 'hour'; }).value;
+          var mv     = parts2.find(function(p) { return p.type === 'minute'; }).value;
+          var dp     = parts2.find(function(p) { return p.type === 'dayPeriod'; }).value.toLowerCase();
+          if (mv === '00' && hv === '12' && dp === 'pm') return 'noon';
+          if (mv === '00' && hv === '12' && dp === 'am') return 'midnight';
+          return hv + ':' + mv + ' ' + dp;
+        }
+
+        function vbvGetPtAbbr(utcMs) {
+          var nameParts = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/Los_Angeles', timeZoneName: 'long'
+          }).formatToParts(new Date(utcMs));
+          var longName = '';
+          for (var ni = 0; ni < nameParts.length; ni++) {
+            if (nameParts[ni].type === 'timeZoneName') longName = nameParts[ni].value;
+          }
+          return (longName.toLowerCase().indexOf('daylight') !== -1 ||
+                  longName.toLowerCase().indexOf('summer')   !== -1) ? 'PDT' : 'PST';
+        }
+
+        function buildVbvPdtWindow(startTimeStr, staggerHours, releaseDateStr) {
+          var parsed = parseFormattedTime(startTimeStr);
+          if (!parsed) return startTimeStr;
+          var dateParts  = releaseDateStr ? releaseDateStr.split(/[-T:]/) : [];
+          var yr2        = dateParts.length >= 3 ? parseInt(dateParts[0], 10) : new Date().getFullYear();
+          var mo2        = dateParts.length >= 3 ? parseInt(dateParts[1], 10) - 1 : new Date().getMonth();
+          var dy2        = dateParts.length >= 3 ? parseInt(dateParts[2], 10) : new Date().getDate();
+          var startUtcMs = resolvePacificUtcMs(yr2, mo2, dy2, parsed.hours, parsed.minutes);
+          var startDate2 = new Date(startUtcMs);
+          var endDate2   = new Date(startUtcMs + (Number(staggerHours) * 60 * 60 * 1000));
+          var ptAbbr     = vbvGetPtAbbr(startUtcMs);
+          var startStr2  = vbvFmtTime(startDate2, 'America/Los_Angeles');
+          var endStr2    = vbvFmtTime(endDate2,   'America/Los_Angeles');
+          var startDay2  = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'long', timeZone: 'America/Los_Angeles' }).format(startDate2);
+          var endDay2    = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'long', timeZone: 'America/Los_Angeles' }).format(endDate2);
+          if (Number(staggerHours) > 0) {
+            if (startDay2 !== endDay2) {
+              return 'between ' + startStr2 + ' and ' + endStr2 + ' ' + ptAbbr + ' (' + endDay2 + ')';
+            }
+            return 'between ' + startStr2 + ' and ' + endStr2 + ' ' + ptAbbr;
+          }
+          return startStr2 + ' ' + ptAbbr;
+        }
+
+        function buildVbvRegionalParenthetical(startTimeStr, staggerHours, releaseDateStr, region) {
+          if (region === 'US') return '';
+          var parsed = parseFormattedTime(startTimeStr);
+          if (!parsed) return '';
+          var dateParts  = releaseDateStr ? releaseDateStr.split(/[-T:]/) : [];
+          var yr2        = dateParts.length >= 3 ? parseInt(dateParts[0], 10) : new Date().getFullYear();
+          var mo2        = dateParts.length >= 3 ? parseInt(dateParts[1], 10) - 1 : new Date().getMonth();
+          var dy2        = dateParts.length >= 3 ? parseInt(dateParts[2], 10) : new Date().getDate();
+          var startUtcMs = resolvePacificUtcMs(yr2, mo2, dy2, parsed.hours, parsed.minutes);
+          var startDate2 = new Date(startUtcMs);
+          var endDate2   = new Date(startUtcMs + (Number(staggerHours) * 60 * 60 * 1000));
+
+          if (region === 'APAC') {
+            var jstStart   = vbvFmtTime(startDate2, 'Asia/Tokyo');
+            var jstEnd     = vbvFmtTime(endDate2,   'Asia/Tokyo');
+            var jstMonth   = new Intl.DateTimeFormat('en-US', { month: 'long',    timeZone: 'Asia/Tokyo' }).format(startDate2);
+            var jstDay     = new Intl.DateTimeFormat('en-US', { day:   'numeric', timeZone: 'Asia/Tokyo' }).format(startDate2);
+            var jstEndDay  = new Intl.DateTimeFormat('en-US', { day:   'numeric', timeZone: 'Asia/Tokyo' }).format(endDate2);
+            var jstLabel   = jstMonth + ' ' + jstDay;
+            if (jstDay !== jstEndDay) {
+              var jstEndMonth = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: 'Asia/Tokyo' }).format(endDate2);
+              jstLabel = jstMonth + ' ' + jstDay + ' into ' + jstEndMonth + ' ' + jstEndDay;
+            }
+            if (Number(staggerHours) > 0) {
+              return ' (' + jstLabel + ', between ' + jstStart + ' and ' + jstEnd + ' JST)';
+            }
+            return ' (' + jstLabel + ' at ' + jstStart + ' JST)';
+          }
+
+          if (region === 'EU') {
+            var cestStart  = vbvFmtTime(startDate2, 'Europe/Paris');
+            var cestEnd    = vbvFmtTime(endDate2,   'Europe/Paris');
+            var cestMonth  = new Intl.DateTimeFormat('en-US', { month: 'long',    timeZone: 'Europe/Paris' }).format(startDate2);
+            var cestDay    = new Intl.DateTimeFormat('en-US', { day:   'numeric', timeZone: 'Europe/Paris' }).format(startDate2);
+            var cestEndDay = new Intl.DateTimeFormat('en-US', { day:   'numeric', timeZone: 'Europe/Paris' }).format(endDate2);
+            var cestLabel  = cestMonth + ' ' + cestDay;
+            if (cestDay !== cestEndDay) {
+              var cestEndMonth = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: 'Europe/Paris' }).format(endDate2);
+              cestLabel = cestMonth + ' ' + cestDay + ' into ' + cestEndMonth + ' ' + cestEndDay;
+            }
+            if (Number(staggerHours) > 0) {
+              return ' (' + cestLabel + ', between ' + cestStart + ' and ' + cestEnd + ' CEST)';
+            }
+            return ' (' + cestLabel + ' at ' + cestStart + ' CEST)';
+          }
+
+          return '';
+        }
+
+        function buildWorldClockUrl(startTimeStr, releaseDateStr, staggerHours) {
+          var parsed    = parseFormattedTime(startTimeStr);
+          if (!parsed) return '';
+          var dateParts = releaseDateStr ? releaseDateStr.split(/[-T:]/) : [];
+          var yr2       = dateParts.length >= 3 ? parseInt(dateParts[0], 10) : new Date().getFullYear();
+          var mo2       = dateParts.length >= 3 ? parseInt(dateParts[1], 10) - 1 : new Date().getMonth();
+          var dy2       = dateParts.length >= 3 ? parseInt(dateParts[2], 10) : new Date().getDate();
+          var isoYr     = String(yr2);
+          var isoMo     = (mo2 + 1 < 10 ? '0' : '') + (mo2 + 1);
+          var isoDy     = (dy2 < 10 ? '0' : '') + dy2;
+          var isoHr     = (parsed.hours < 10 ? '0' : '') + parsed.hours;
+          var isoMin    = (parsed.minutes < 10 ? '0' : '') + parsed.minutes;
+          var ahParam   = (Number(staggerHours) > 0) ? '&ah=' + Number(staggerHours) : '';
+          return 'https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&iso=' + isoYr + isoMo + isoDy + 'T' + isoHr + isoMin + ahParam + '&sort=1';
+        }
+
+        var deployTimeGroups = {};
+        checkedBoxes2.forEach(function(cb) {
+          var dt      = cb.getAttribute('data-deployment-time') || '';
+          var region  = cb.getAttribute('data-region') || 'US';
+          var timeKey = dt.trim() || '__global__';
+          if (!deployTimeGroups[timeKey])         deployTimeGroups[timeKey] = {};
+          if (!deployTimeGroups[timeKey][region]) deployTimeGroups[timeKey][region] = [];
+          deployTimeGroups[timeKey][region].push(cb.value);
+        });
+
+        var sortedGroupKeys = Object.keys(deployTimeGroups).sort(function(a, b) {
+          if (a === '__global__') return 1;
+          if (b === '__global__') return -1;
+          var pa = parseFormattedTime(a);
+          var pb = parseFormattedTime(b);
+          if (!pa) return 1;
+          if (!pb) return -1;
+          return (pa.hours * 60 + pa.minutes) - (pb.hours * 60 + pb.minutes);
+        });
+
+        var regionOrder = ['US', 'EU', 'APAC'];
+        var vbvLines    = [];
+
+        sortedGroupKeys.forEach(function(timeKey) {
+          var regionMap = deployTimeGroups[timeKey];
+
+          var regionsInSlot = Object.keys(regionMap).sort(function(a, b) {
+            var ia = regionOrder.indexOf(a); var ib = regionOrder.indexOf(b);
+            if (ia === -1) ia = 999; if (ib === -1) ib = 999;
+            return ia - ib;
+          });
+
+          regionsInSlot.forEach(function(region) {
+            var sortedPods   = regionMap[region].slice().sort(naturalSort);
+            var linkedWindow = '';
+
+            if (timeKey === '__global__') {
+              if (region === 'US')   linkedWindow = ptStaggeredText   || '';
+              if (region === 'EU')   linkedWindow = euPtLink + cestStaggeredText;
+              if (region === 'APAC') linkedWindow = apacPtLink + jstStaggeredText;
+            } else {
+              var pdtWindowText = buildVbvPdtWindow(timeKey, staggeredHours, rawDate);
+              var clockUrl      = buildWorldClockUrl(timeKey, rawDate, staggeredHours);
+              var regionalParen = buildVbvRegionalParenthetical(timeKey, staggeredHours, rawDate, region);
+              linkedWindow = ' <a href="' + clockUrl
+                + '" clicktracking="off" target="_blank"'
+                + ' style="color: #007bff; text-decoration: none;">'
+                + pdtWindowText + '</a>' + regionalParen;
+            }
+
+            vbvLines.push(
+              '<u><strong>' + region + '</strong></u>'
+              + linkedWindow + ':  '
+              + sortedPods.join(', ')
+            );
+          });
+        });
+
+        var hrSep = '\n<div style="margin-top: 4px;"></div>\n';
+        compiledLines.push(vbvLines.join(hrSep));
+
+      } else {
+
+        // Classic downtime path
+        var classicBaseUtcMs = 0;
+        if (rawDate) {
+          var cdp = rawDate.split(/[-T:]/);
+          if (cdp.length >= 5) {
+            classicBaseUtcMs = resolvePacificUtcMs(
+              parseInt(cdp[0],10),
+              parseInt(cdp[1],10) - 1,
+              parseInt(cdp[2],10),
+              parseInt(cdp[3],10),
+              parseInt(cdp[4],10)
+            );
+          }
+        }
+
+        var classicWorldClockUrl = rawDate
+          ? 'https://www.timeanddate.com/worldclock/fixedtime.html?p1=5402&iso=' + rawDate.replace(/[-:]/g, '') + '&sort=1'
+          : '';
+
+        function classicFmtTime(utcMs, timeZone) {
+          var parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: timeZone }).formatToParts(new Date(utcMs));
+          var hv = ''; var mv = ''; var dp = '';
+          for (var ci = 0; ci < parts.length; ci++) {
+            if (parts[ci].type === 'hour')      hv = parts[ci].value;
+            if (parts[ci].type === 'minute')    mv = parts[ci].value;
+            if (parts[ci].type === 'dayPeriod') dp = parts[ci].value.toLowerCase();
+          }
+          if (mv === '00' && hv === '12' && dp === 'pm') return 'noon';
+          if (mv === '00' && hv === '12' && dp === 'am') return 'midnight';
+          return hv + ':' + mv + ' ' + dp;
+        }
+
+        function classicGetTzAbbr(utcMs, timeZone) {
+          if (timeZone === 'Asia/Tokyo') return 'JST';
+          var nameParts = new Intl.DateTimeFormat('en-US', { timeZone: timeZone, timeZoneName: 'long' }).formatToParts(new Date(utcMs));
+          var longName  = '';
+          for (var ni = 0; ni < nameParts.length; ni++) {
+            if (nameParts[ni].type === 'timeZoneName') longName = nameParts[ni].value;
+          }
+          if (timeZone === 'America/Los_Angeles') return (longName.toLowerCase().indexOf('daylight') !== -1 || longName.toLowerCase().indexOf('summer') !== -1) ? 'PDT' : 'PST';
+          if (timeZone === 'Europe/Paris')        return (longName.toLowerCase().indexOf('summer')   !== -1 || longName.toLowerCase().indexOf('daylight') !== -1) ? 'CEST' : 'CET';
+          return '';
+        }
+
+        function classicJstCrossesDay(utcMs) {
+          var ptDay  = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone: 'America/Los_Angeles' }).format(new Date(utcMs));
+          var jstDay = new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone: 'Asia/Tokyo' }).format(new Date(utcMs));
+          return ptDay !== jstDay;
+        }
+
+        function classicJstFullLabel(utcMs) {
+          var d       = new Date(utcMs);
+          var weekday = new Intl.DateTimeFormat('en-US', { weekday: 'long',    timeZone: 'Asia/Tokyo' }).format(d);
+          var month   = new Intl.DateTimeFormat('en-US', { month:   'long',    timeZone: 'Asia/Tokyo' }).format(d);
+          var day     = new Intl.DateTimeFormat('en-US', { day:     'numeric', timeZone: 'Asia/Tokyo' }).format(d);
+          return weekday + ', ' + month + ' ' + day + ' at ' + classicFmtTime(utcMs, 'Asia/Tokyo') + ' JST';
+        }
+
+        var classicLines = [];
+
+        targetRegionOrder.forEach(function(regKey) {
+          if (!regionalNestedMap[regKey]) return;
+
+          Object.keys(regionalNestedMap[regKey]).sort().forEach(function(releaseTypeTag) {
+            var regionPods = [];
+            [].slice.call(document.querySelectorAll('.pod-box:checked')).forEach(function(cb) {
+              var boxRegion  = cb.getAttribute('data-region');
+              var boxRelease = cb.getAttribute('data-release');
+              if (boxRegion === regKey && boxRelease === releaseTypeTag) {
+                if (regionPods.indexOf(cb.value) === -1) regionPods.push(cb.value);
+              }
+            });
+            if (regionPods.length === 0) return;
+
+            var sortedPods = regionPods.sort(naturalSort);
+
+            var ptStr = classicBaseUtcMs
+              ? classicFmtTime(classicBaseUtcMs, 'America/Los_Angeles') + ' ' + classicGetTzAbbr(classicBaseUtcMs, 'America/Los_Angeles')
+              : '';
+            var parenthetical = '';
+            if (regKey === 'EU' && classicBaseUtcMs) {
+              parenthetical = ' (' + classicFmtTime(classicBaseUtcMs, 'Europe/Paris') + ' ' + classicGetTzAbbr(classicBaseUtcMs, 'Europe/Paris') + ')';
+            } else if (regKey === 'APAC' && classicBaseUtcMs) {
+              parenthetical = ' (' + classicFmtTime(classicBaseUtcMs, 'Asia/Tokyo') + ' JST)';
+            }
+
+            var timeAnchor = '';
+            if (classicBaseUtcMs && classicWorldClockUrl) {
+              if (regKey === 'EU') {
+                var euRegionalStr   = classicFmtTime(classicBaseUtcMs, 'Europe/Paris') + ' ' + classicGetTzAbbr(classicBaseUtcMs, 'Europe/Paris');
+                var euRegionalParen = ' (' + euRegionalStr + ')';
+                timeAnchor = ' <a href="' + classicWorldClockUrl + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">' + ptStr + '</a>' + euRegionalParen;
+              } else if (regKey === 'APAC') {
+                var apacRegionalStr   = classicFmtTime(classicBaseUtcMs, 'Asia/Tokyo') + ' JST';
+                var apacRegionalParen = ' (' + apacRegionalStr + ')';
+                timeAnchor = ' <a href="' + classicWorldClockUrl + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">' + ptStr + '</a>' + apacRegionalParen;
+              } else {
+                timeAnchor = ' <a href="' + classicWorldClockUrl + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">' + ptStr + '</a>';
+              }
+            } else if (ptStr) {
+              timeAnchor = ' ' + ptStr + parenthetical;
+            } else {
+              timeAnchor = ':';
+            }
+            classicLines.push('<u><strong>' + regKey + '</strong></u>' + timeAnchor + ':  ' + sortedPods.join(', '));
+          });
+        });
+
+        // NEW: fallback for any region value outside US/EU/APAC (e.g. "Unknown"
+        // for PODs whose metadata hasn't been mapped to this release cycle yet).
+        // Without this, those PODs were silently dropped from the Classic/downtime
+        // path even though the Maintenance path already handles this case via its
+        // own second loop above. Mirrors that same pattern for the Classic branch.
+        Object.keys(regionalNestedMap).forEach(function(regKey) {
+          if (targetRegionOrder.indexOf(regKey) !== -1) return;
+
+          Object.keys(regionalNestedMap[regKey]).sort().forEach(function(releaseTypeTag) {
+            var regionPods = [];
+            [].slice.call(document.querySelectorAll('.pod-box:checked')).forEach(function(cb) {
+              var boxRegion  = cb.getAttribute('data-region');
+              var boxRelease = cb.getAttribute('data-release');
+              if (boxRegion === regKey && boxRelease === releaseTypeTag) {
+                if (regionPods.indexOf(cb.value) === -1) regionPods.push(cb.value);
+              }
+            });
+            if (regionPods.length === 0) return;
+
+            var sortedPods = regionPods.sort(naturalSort);
+            var ptStrFallback = classicBaseUtcMs
+              ? classicFmtTime(classicBaseUtcMs, 'America/Los_Angeles') + ' ' + classicGetTzAbbr(classicBaseUtcMs, 'America/Los_Angeles')
+              : '';
+            var timeAnchorFallback = (classicBaseUtcMs && classicWorldClockUrl)
+              ? ' <a href="' + classicWorldClockUrl + '" clicktracking="off" target="_blank" style="color: #007bff; text-decoration: none;">' + ptStrFallback + '</a>'
+              : (ptStrFallback ? ' ' + ptStrFallback : ':');
+            classicLines.push('<u><strong>' + regKey + '</strong></u>' + timeAnchorFallback + ':  ' + sortedPods.join(', '));
+          });
+        });
+
+        var hrSep2 = '\n<div style="margin-top: 4px;"></div>\n';
+        compiledLines.push(classicLines.join(hrSep2));
+
+      }     // closes: else (Classic path, not VBV)
+    }       // closes: else (isMaintenanceTemplate false)
+
+    textArea.value = isMaintenanceTemplate ? compiledLines.join('\n\n') : (compiledLines[0] || "");
+    debouncedPreview();
+  }
+
+  // -------------------------------------------------------------------
+  // LIVE PREVIEW
+  // -------------------------------------------------------------------
+  function updatePreview() {
+    try {
+      var viewport = document.getElementById('dynamicTemplateViewport');
+      if (!viewport) return;
+      var releaseTypeValue = getSafeValue('releaseType', '');
+      if (!releaseTypeValue || !globalTemplatesRegistry || globalTemplatesRegistry.length === 0) {
+        viewport.innerHTML = "<div style='padding:20px; color:#666;'>Awaiting data initialization config...</div>";
+        return;
+      }
+
+      var activeMatch        = globalTemplatesRegistry.find(function(t) { return t.key === releaseTypeValue; });
+      var isDowntimeRequired = activeMatch ? (activeMatch.requiresDowntime === true) : false;
+
+      console.log('[updatePreview] htmlUpper length:', activeMatch ? (activeMatch.htmlUpper || '').length : 'NO MATCH');
+      console.log('[updatePreview] affectedPods length:', getSafeValue('affectedPods','').length);
+
+      var formDataPayload = {
+        envTheme:             getSafeValue('envTheme', 'PROD'),
+        version:              getSafeValue('releaseVersion', '26R1.0.22'),
+        friendlyDate:         getSafeValue('friendlyDate', 'Wednesday, April 29 at 10:00 am PDT'),
+        targetDateIso:        getSafeValue('isoStringValue', '20260429T1000'),
+        isoString:            getSafeValue('isoStringValue', '20260429T1000'),
+        rawDateValue:         getSafeValue('dateTime', ''),
+        templateKey:          releaseTypeValue,
+        requiresDowntime:     isDowntimeRequired,
+        estimatedDowntime:    (isDowntimeRequired || /maintenance/i.test(releaseTypeValue)) ? getSafeValue('estimatedDowntime', '90 Minutes') : "",
+        staggeredWindowHours: isDowntimeRequired ? Number(getSafeValue('staggeredWindowHours', '0')) : 0,
+        emailTitle:           getSafeValue('emailTitle', ''),
+        product:              resolveActiveProductToken(),
+        notesUrl:             resolveActiveNotesUrl(activeMatch),
+        whatsNewUrl:          activeMatch ? (activeMatch.whatsNewUrl || '') : '',
+        customNotesText:      getSafeValue('emailNotes', ''),
+        affectedPods:         getSafeValue('affectedPods', ''),
+        htmlUpper:            activeMatch ? (activeMatch.htmlUpper || '') : '',
+        htmlLower:            activeMatch ? (activeMatch.htmlLower || '') : '',
+        // P4-04: Resolve optional block HTML for maintenance templates.
+        // Uses explicit key comparison to avoid || short-circuit producing wrong block
+        // when block1Html is an empty string (falsy). Each key maps to exactly one source.
+        activeOptionalBlockHtml: (function() {
+          var isMaintOnly = /maintenance/i.test(releaseTypeValue) && !(activeMatch && activeMatch.requiresDowntime);
+          if (!isMaintOnly || !activeOptionalBlockKey) return '';
+          if (activeOptionalBlockKey === 'block1') return activeMatch ? (activeMatch.optionalBlock1Html || '') : '';
+          if (activeOptionalBlockKey === 'block2') return activeMatch ? (activeMatch.optionalBlock2Html || '') : '';
+          return '';
+        })()
+      };
+
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(function(html) {
+            viewport.innerHTML = html || '<div style="color:red;padding:20px;">Server returned empty response</div>';
+          })
+          .withFailureHandler(function(err) {
+            console.error('[generateMasterHtmlLayout FAILED]', err.message || err);
+            viewport.innerHTML = '<div style="color:red;padding:20px;">Server error: ' + (err.message || err) + '</div>';
+          })
+          .generateMasterHtmlLayout(formDataPayload);
+      }
+    } catch (e) { console.error(e); }
+  }
+
+  // -------------------------------------------------------------------
+  // FORM RESET
+  // -------------------------------------------------------------------
+  function confirmClearForm() {
+    if (confirm("Are you sure you want to clear this form? All custom changes will be lost.")) {
+      executeFormReset();
+    }
+  }
+
+  function executeFormReset() {
+    var resetTemplate      = null;
+    var resetDowntimeValue = "90 Minutes";
+    if (globalTemplatesRegistry && globalTemplatesRegistry.length > 0) {
+      document.getElementById('releaseType').value = globalTemplatesRegistry[0].key;
+      resetTemplate = globalTemplatesRegistry[0];
+      if (resetTemplate && resetTemplate.defaultDowntime) {
+        resetDowntimeValue = String(resetTemplate.defaultDowntime).trim();
+      }
+    }
+    document.getElementById('envTheme').value             = "PROD";
+    document.getElementById('statusCastType').value       = "Maintenance";
+    document.getElementById('releaseVersion').value       = "26R1.0.22";
+    document.getElementById('estimatedDowntime').value    = resetDowntimeValue;
+    document.getElementById('staggeredWindowHours').value = "0";
+
+
+    var durationLabel = document.getElementById('estimatedDurationLabel');
+    if (durationLabel) {
+      var firstKey = resetTemplate ? (resetTemplate.key   || "") : "";
+      var firstLbl = resetTemplate ? (resetTemplate.label || "") : "";
+      durationLabel.textContent = (/maintenance/i.test(firstKey) || /maintenance/i.test(firstLbl))
+        ? "Estimated Duration"
+        : "Estimated Vault Downtime";
+    }
+
+    var now = new Date();
+    var rm  = now.getMonth() + 1;
+    var rd  = now.getDate();
+    document.getElementById('dateTime').value = now.getFullYear() + "-" + (rm < 10 ? '0' : '') + rm + "-" + (rd < 10 ? '0' : '') + rd + "T10:00";
+
+    activeRegions = []; activeReleases = []; activeProducts = []; activeUpgradeModes = [];
+    // P4-04: Clear optional block selection on full form reset.
+    activeOptionalBlockKey = '';
+    var radioNoneReset = document.getElementById('optBlock_none');
+    if (radioNoneReset) radioNoneReset.checked = true;
+    var rb1Reset = document.getElementById('optBlock_block1');
+    if (rb1Reset) rb1Reset.checked = false;
+    var rb2Reset = document.getElementById('optBlock_block2');
+    if (rb2Reset) rb2Reset.checked = false;
+    regionOnlyModeActive = false;
+    var regionToggleReset = document.getElementById('regionOnlyToggle');
+    if (regionToggleReset) regionToggleReset.checked = false;
+    updateGeneralButtonState();
+    [].slice.call(document.querySelectorAll('.macro-filter-btn')).forEach(function(btn) { btn.classList.remove('active'); });
+    var masterCheck = document.getElementById('masterSelectAll');
+    if (masterCheck) { masterCheck.checked = false; masterCheck.indeterminate = false; }
+    [].slice.call(document.querySelectorAll('.pod-box')).forEach(function(cb) { cb.checked = false; });
+    document.getElementById('affectedPods').value = "";
+    evaluateReleaseTypeContext();
+    formatFriendlyDate();
+  }
+
+  // -------------------------------------------------------------------
+  // SUBMIT
+  // -------------------------------------------------------------------
+  function submitData(targetPlatform) {
+    var releaseTypeValue = getSafeValue('releaseType', 'maintenance');
+    var activeMatch      = globalTemplatesRegistry.find(function(t) { return t.key === releaseTypeValue; });
+
+    var formDataPayload = {
+      envTheme:             getSafeValue('envTheme', 'PROD'),
+      releaseType:          releaseTypeValue,
+      templateKey:          releaseTypeValue,
+      requiresDowntime:     activeMatch ? activeMatch.requiresDowntime : false,
+      statusCastType:       getSafeValue('statusCastType', 'Maintenance'),
+      emailTitle:           getSafeValue('emailTitle', ''),
+      product:              resolveActiveProductToken(),
+      subjectLine:          getSafeValue('subjectLine', ''),
+      version:              getSafeValue('releaseVersion', ''),
+      friendlyDate:         getSafeValue('friendlyDate', ''),
+      targetDateIso:        getSafeValue('isoStringValue', ''),
+      isoString:            getSafeValue('isoStringValue', ''),
+      rawDateValue:         getSafeValue('dateTime', ''),
+      affectedPods:         getSafeValue('affectedPods', ''),
+     notesUrl:             resolveActiveNotesUrl(activeMatch),
+      whatsNewUrl:          activeMatch ? (activeMatch.whatsNewUrl || '') : '',
+      customNotesText:      getSafeValue('emailNotes', ''),
+      estimatedDowntime:    getSafeValue('estimatedDowntime', '90 Minutes'),
+      staggeredWindowHours: Number(getSafeValue('staggeredWindowHours', '0')),
+      htmlUpper:            activeMatch ? activeMatch.htmlUpper : "",
+      htmlLower:            activeMatch ? activeMatch.htmlLower : "",
+      podMetadata:          podMetadataMap,
+      // P4-04: Resolve optional block HTML for maintenance templates.
+      // Explicit key comparison avoids || short-circuit on empty block1Html.
+      activeOptionalBlockHtml: (function() {
+        var isMaintOnly = /maintenance/i.test(releaseTypeValue) && !(activeMatch && activeMatch.requiresDowntime);
+        if (!isMaintOnly || !activeOptionalBlockKey) return '';
+        if (activeOptionalBlockKey === 'block1') return activeMatch ? (activeMatch.optionalBlock1Html || '') : '';
+        if (activeOptionalBlockKey === 'block2') return activeMatch ? (activeMatch.optionalBlock2Html || '') : '';
+        return '';
+      })()
+    };
+
+    if (targetPlatform === 'SendGrid') {
+      var sgBtn = document.getElementById('submitActionBtn');
+      if (sgBtn) { sgBtn.innerText = "Processing Request..."; sgBtn.disabled = true; }
+
+      if (regionOnlyModeActive) {
+        // REGION ONLY MODE -- hybrid targeting (PHASE 4 FIX: Region + Vault
+        // gate, Column B fallback). Confirmed use case: "If Region is
+        // selected and Product = Vault, then SendGrid Segment IDs = Col L,
+        // else SendGrid Segment ID = Col B."
+        //   PODs that pass isVaultRegionalPod() (a Region filter is active
+        //     AND Product = Vault AND Column B matches the "Vault-GR"
+        //     pattern): contribute their Column L (Regional Segment Name)
+        //     value to regionNamesObj. If that specific POD has NO Column L
+        //     value entered despite qualifying, it does not drop silently --
+        //     it falls back to its own individual Column B pod-group name
+        //     instead, same as the path below.
+        //   Every other checked POD (no Region filter active, OR Product is
+        //     not Vault, OR Column B doesn't match "Vault-GR") always
+        //     resolves via its own individual Column B pod-group name --
+        //     this is the "else Col B" half of the use case.
+        // Both sets are resolved independently and unioned into one
+        // segment_ids array server-side (see processPushRequest).
+        // Classifying checked PODs by Column B (data-pod-group) also lets
+        // the guard below tell "expected -- nothing selected" apart from
+        // "unexpected -- PODs selected but still nothing resolvable on
+        // either path".
+        var regionNamesObj       = {};
+        var fallbackPodGroupsObj = {};
+        var checkedGrCount       = 0;
+        var checkedNonGrCount    = 0;
+        [].slice.call(document.querySelectorAll('.pod-box:checked')).forEach(function(cb) {
+          var pg = cb.getAttribute('data-pod-group') || '';
+          if (isVaultRegionalPod(cb)) {
+            checkedGrCount++;
+            var rname = cb.getAttribute('data-regional-segment-name');
+            if (rname && rname.trim() !== "") {
+              regionNamesObj[rname.trim()] = true;
+            } else if (pg && pg !== "No Match Found" && pg !== "Unmapped") {
+              // Qualifying Vault-GR POD with no Column L value entered --
+              // fall back to its own Column B segment name rather than
+              // dropping it from the send entirely.
+              fallbackPodGroupsObj[pg.trim()] = true;
+            }
+          } else {
+            checkedNonGrCount++;
+            if (pg && pg !== "No Match Found" && pg !== "Unmapped") fallbackPodGroupsObj[pg.trim()] = true;
+          }
+        });
+
+        // GUARD: Region Only is on, but nothing was collected on either
+        // path. Sending two empty arrays here silently produces a
+        // zero-recipient draft, so block it client-side instead of letting
+        // it reach SendGrid. With the Column B fallback above, this now
+        // only fires when a checked POD's Column B value is ALSO
+        // "Unmapped" / "No Match Found" (true zero-recipient case) -- it no
+        // longer fires merely because Column L was left blank.
+        if (Object.keys(regionNamesObj).length === 0 && Object.keys(fallbackPodGroupsObj).length === 0) {
+          var alertMsg;
+          if (checkedGrCount === 0 && checkedNonGrCount === 0) {
+            alertMsg = "Region Only is enabled, but no PODs are selected.\n\n"
+              + "This draft was NOT submitted -- select at least one POD, or uncheck Region Only.";
+          } else {
+            // Only reachable when every checked POD's Column B value is
+            // itself "Unmapped" / "No Match Found" -- genuinely unexpected,
+            // since any POD with a usable Column B value now always
+            // resolves through the fallback above.
+            alertMsg = "Region Only is enabled, and " + (checkedGrCount + checkedNonGrCount) + " POD(s) are selected, but none of them have a usable Regional Segment Name (Column L) or SendGrid Segment Name (Column B).\n\n"
+              + "This draft was NOT submitted -- sending now would create a SendGrid campaign with zero recipients.\n\n"
+              + "Check POD Profiles Column L and Column B for the selected PODs.";
+          }
+          alert(alertMsg);
+          if (sgBtn) { sgBtn.innerText = "Create SendGrid Draft"; sgBtn.disabled = false; }
+          return;
+        }
+
+        formDataPayload.regionOnlyMode       = true;
+        formDataPayload.regionalSegmentNames = Object.keys(regionNamesObj);
+        formDataPayload.selectedPodGroups    = Object.keys(fallbackPodGroupsObj);
+      } else {
+        var podGroupsObj = {};
+        [].slice.call(document.querySelectorAll('.pod-box:checked')).forEach(function(cb) {
+          var pg = cb.getAttribute('data-pod-group');
+          if (pg && pg !== "No Match Found" && pg !== "Unmapped") podGroupsObj[pg.trim()] = true;
+        });
+        formDataPayload.regionOnlyMode    = false;
+        formDataPayload.selectedPodGroups = Object.keys(podGroupsObj);
+      }
+
+      google.script.run
+        .withSuccessHandler(function(res) {
+          if (res && res.status === 'error') {
+            var alertText = "API Rejection:\n\n" + res.message;
+            if (res.segmentDiagnostic && res.segmentDiagnostic.length > 0) {
+              alertText += "\n\n--- Active SendGrid Segments (" + res.segmentDiagnostic.length + " / 10 max) ---\n";
+              res.segmentDiagnostic.forEach(function(seg, idx) {
+                alertText += (idx + 1) + ". [" + seg.id + "]  " + seg.name + "\n";
+              });
+              if (res.segmentDiagnostic.length >= 10) {
+                alertText += "\nWARNING: Segment quota at limit. Delete unused segments in SendGrid before retrying.";
+              }
+            }
+            alert(alertText);
+            if (sgBtn) { sgBtn.innerText = "Create SendGrid Draft"; sgBtn.disabled = false; }
+          } else {
+            // Informational only -- only ever present when a non-blank
+            // segment name (Column B or Column L) was submitted but did not
+            // match a live SendGrid segment. Never fires for blank/unmapped
+            // values, so this stays silent during normal partial rollout.
+            if (res && res.unmatchedSegmentNames && res.unmatchedSegmentNames.length > 0) {
+              alert("SendGrid Draft Created, but the following segment name(s) did not match any live SendGrid segment and were skipped:\n\n"
+                + res.unmatchedSegmentNames.join("\n")
+                + "\n\nCheck for a typo, or a segment that was renamed/deleted in SendGrid.");
+            }
+            if (sgBtn) {
+              sgBtn.classList.add('success-state'); sgBtn.innerText = "SendGrid Draft Created!"; sgBtn.disabled = false;
+              setTimeout(function() { sgBtn.classList.remove('success-state'); sgBtn.innerText = "Create SendGrid Draft"; }, 3500);
+            }
+          }
+        })
+        .withFailureHandler(function(err) {
+          alert("SendGrid Network Error: " + err.toString());
+          if (sgBtn) { sgBtn.innerText = "Create SendGrid Draft"; sgBtn.disabled = false; }
+        })
+        .processPushRequest(formDataPayload);
+    } else {
+      var scBtn = document.getElementById('trustActionBtn');
+      if (scBtn) { scBtn.innerText = "Pushing to StatusCast..."; scBtn.disabled = true; }
+      google.script.run
+        .withSuccessHandler(function(res) {
+          if (res && res.status === 'error') {
+            alert("API Rejection:\n\n" + res.message);
+            if (scBtn) { scBtn.innerText = "Create Trust Draft"; scBtn.disabled = false; }
+          } else {
+            if (scBtn) {
+              scBtn.classList.add('success-state'); scBtn.innerText = "StatusCast Draft Created!"; scBtn.disabled = false;
+              setTimeout(function() { scBtn.classList.remove('success-state'); scBtn.innerText = "Create Trust Draft"; }, 3500);
+            }
+          }
+        })
+        .withFailureHandler(function(err) {
+          alert("StatusCast Network Error: " + err.toString());
+          if (scBtn) { scBtn.innerText = "Create Trust Draft"; scBtn.disabled = false; }
+        })
+        .processTrustPushRequest(formDataPayload);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // TAB SWITCHING
+  // Manages three tabs: comm-gen, template-ed, global-settings.
+  // All views and links are reset to inactive first, then the target
+  // tab is activated. This pattern makes adding future tabs trivial --
+  // just extend the allViews / allLinks arrays and add a new branch.
+  // -------------------------------------------------------------------
+  function switchAppTab(targetId) {
+    var allViews = [
+      document.getElementById('view-comm-gen'),
+      document.getElementById('view-template-ed'),
+      document.getElementById('view-global-settings')
+    ];
+    var allLinks = [
+      document.getElementById('link-comm-gen'),
+      document.getElementById('link-template-ed'),
+      document.getElementById('link-global-settings')
+    ];
+
+    allViews.forEach(function(v) { if (v) v.style.display = 'none'; });
+    allLinks.forEach(function(l) {
+      if (l) { l.style.color = '#4a5568'; l.style.borderBottomColor = 'transparent'; }
+    });
+
+    if (targetId === 'comm-gen') {
+      var commView = document.getElementById('view-comm-gen');
+      var commLink = document.getElementById('link-comm-gen');
+      if (commView) commView.style.display = 'flex';
+      if (commLink) { commLink.style.color = '#1a73e8'; commLink.style.borderBottomColor = '#1a73e8'; }
+
+    } else if (targetId === 'template-ed') {
+      var tmplView = document.getElementById('view-template-ed');
+      var tmplLink = document.getElementById('link-template-ed');
+      if (tmplView) tmplView.style.display = 'flex';
+      if (tmplLink) { tmplLink.style.color = '#1a73e8'; tmplLink.style.borderBottomColor = '#1a73e8'; }
+      syncEditorTemplateDropdown();
+
+    } else if (targetId === 'global-settings') {
+      var gsView = document.getElementById('view-global-settings');
+      var gsLink = document.getElementById('link-global-settings');
+      if (gsView) gsView.style.display = 'flex';
+      if (gsLink) { gsLink.style.color = '#1a73e8'; gsLink.style.borderBottomColor = '#1a73e8'; }
+      loadGlobalSettingsToForm();
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // TEMPLATE STUDIO
+  // -------------------------------------------------------------------
+  function syncEditorTemplateDropdown() {
+    var editorSelector = document.getElementById('editorTemplateSelect');
+    if (!editorSelector || !globalTemplatesRegistry) return;
+    editorSelector.innerHTML = '<option value="">-- Add New Template Reference --</option>'
+      + globalTemplatesRegistry.map(function(t) {
+          return '<option value="' + t.key + '">' + t.label + '</option>';
+        }).join('');
+  }
+
+  function loadTemplateToEditorForm() {
+    var selectKey    = document.getElementById('editorTemplateSelect').value;
+    var deleteBtn    = document.getElementById('deleteTemplateBtn');
+    var typeSelector = document.getElementById('ed_templateType');
+    var saveBtn      = document.getElementById('saveTemplateBtn');
+
+    if (!selectKey) {
+      ['ed_key','ed_label','ed_subject','ed_title','ed_notesUrl','ed_whatsNewUrl','ed_defaultVersion'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      setEditorContent('ed_upper_editor', '');
+      setEditorContent('ed_lower_editor', '');
+      setEditorContent('ed_optBlock1_editor', '');
+      setEditorContent('ed_optBlock2_editor', '');
+      var ob1LblEl = document.getElementById('ed_optBlock1Label');
+      var ob2LblEl = document.getElementById('ed_optBlock2Label');
+      if (ob1LblEl) ob1LblEl.value = '';
+      if (ob2LblEl) ob2LblEl.value = '';
+      var regionChkReset = document.getElementById('ed_allowsRegionSegment');
+      if (regionChkReset) regionChkReset.checked = false;
+      typeSelector.value = 'Maintenance';
+      document.getElementById('ed_staggeredHours').value  = '0';
+      document.getElementById('ed_defaultDowntime').value = '90 Minutes';
+      toggleEditorTypeFields('Maintenance');
+      if (deleteBtn) deleteBtn.style.display = 'none';
+      if (saveBtn)   saveBtn.innerHTML = '&#128190; Save as New Template Reference';
+      return;
+    }
+
+    var match = globalTemplatesRegistry.find(function(t) { return t.key === selectKey; });
+    if (!match) return;
+
+    document.getElementById('ed_key').value            = match.key;
+    document.getElementById('ed_label').value          = match.label || match.key;
+    document.getElementById('ed_subject').value        = match.subject || match.Default_Subject || '';
+    document.getElementById('ed_title').value          = match.title  || match.Default_Title   || '';
+    document.getElementById('ed_notesUrl').value       = match.notesUrl || 'https://vaulthelp.veeva.com';
+    document.getElementById('ed_whatsNewUrl').value    = match.whatsNewUrl || '';
+    document.getElementById('ed_defaultVersion').value = match.defaultVersion || '';
+    setEditorContent('ed_upper_editor', match.htmlUpper || '');
+    setEditorContent('ed_lower_editor', match.htmlLower || '');
+    setEditorContent('ed_optBlock1_editor', match.optionalBlock1Html || '');
+    setEditorContent('ed_optBlock2_editor', match.optionalBlock2Html || '');
+    var ob1LblLoad = document.getElementById('ed_optBlock1Label');
+    var ob2LblLoad = document.getElementById('ed_optBlock2Label');
+    if (ob1LblLoad) ob1LblLoad.value = match.optionalBlock1Label || '';
+    if (ob2LblLoad) ob2LblLoad.value = match.optionalBlock2Label || '';
+    var regionChkLoad = document.getElementById('ed_allowsRegionSegment');
+    if (regionChkLoad) regionChkLoad.checked = (match.allowsRegionSegment === true);
+
+    var deducedType = (match.requiresDowntime === true) ? 'Downtime' : 'Maintenance';
+    typeSelector.value = deducedType;
+    document.getElementById('ed_staggeredHours').value  = match.staggeredWindowHours || 0;
+    document.getElementById('ed_defaultDowntime').value = match.defaultDowntime || '90 Minutes';
+    toggleEditorTypeFields(deducedType);
+
+    if (deleteBtn) deleteBtn.style.display = 'block';
+    if (saveBtn)   saveBtn.innerHTML = '&#128221; Overwrite Existing Template Settings';
+  }
+
+  function toggleEditorTypeFields(selectedType) {
+    var downtimeBlock   = document.getElementById('ed_downtime_fields');
+    var whatsNewBlock   = document.getElementById('ed_whatsNewUrlWrapper');
+    var optBlockMeta    = document.getElementById('ed_optionalBlockSection');
+    var optBlockEditors = document.getElementById('ed_optionalBlockSection_editors');
+
+    if (downtimeBlock)    downtimeBlock.style.display    = (selectedType === 'Downtime')    ? 'flex' : 'none';
+    if (whatsNewBlock)    whatsNewBlock.style.display    = (selectedType === 'Downtime')    ? 'flex' : 'none';
+    if (optBlockMeta)     optBlockMeta.style.display     = (selectedType === 'Maintenance') ? 'flex' : 'none';
+    if (optBlockEditors)  optBlockEditors.style.display  = (selectedType === 'Maintenance') ? 'flex' : 'none';
+
+    if (selectedType !== 'Downtime') {
+      var ddField = document.getElementById('ed_defaultDowntime');
+      if (ddField) ddField.value = '90 Minutes';
+      var shField = document.getElementById('ed_staggeredHours');
+      if (shField) shField.value = '0';
+      var wnField = document.getElementById('ed_whatsNewUrl');
+      if (wnField) wnField.value = '';
+    }
+  }
+
+  function submitTemplateConfigToServer() {
+    var saveBtn     = document.getElementById('saveTemplateBtn');
+    var targetKey   = document.getElementById('ed_key').value;
+    var targetLabel = document.getElementById('ed_label').value;
+
+function stripRenderedLinks(html) {
+  return html
+    // FIX: was [\w\d]+, which matched ANY preceding word -- including
+    // "Developer Release Notes" -- and would silently rewrite that link to
+    // point at the generic notesUrl on next save. Now requires the prefix to
+    // start with a digit (version-shaped, e.g. "26R3"), so "Developer Release
+    // Notes" is left alone.
+    .replace(/<a[^>]*href="[^"]*"[^>]*>\s*\d[\w.]*\s*Release Notes\s*<\/a>/gi, '[[VERSION]] Release Notes')
+    .replace(/<a[^>]*href="[^"]*"[^>]*>\s*Release Notes\s*<\/a>/gi, '[[RELEASE_NOTES_URL]]')
+    .replace(/<a[^>]*href="[^"]*vaultpod[^"]*"[^>]*>\s*here\s*<\/a>/gi, '[[LOCATION_TAG]]')
+    .replace(/<a[^>]*href="[^"]*trust\.veeva\.com[^"]*"[^>]*>\s*Veeva Trust Site\s*<\/a>/gi, 'Veeva Trust Site')
+    .replace(/<a[^>]*href="[^"]*support\.veeva\.com[^"]*"[^>]*>\s*Veeva Product Support\s*<\/a>/gi, 'Veeva Product Support');
+}
+
+    var payload = {
+      key:                  targetKey,
+      label:                targetLabel,
+      templateType:         document.getElementById('ed_templateType').value,
+      subject:              document.getElementById('ed_subject').value,
+      title:                document.getElementById('ed_title').value,
+      staggeredWindowHours: document.getElementById('ed_staggeredHours').value,
+      defaultDowntime:      document.getElementById('ed_defaultDowntime').value || '90 Minutes',
+      defaultVersion:       document.getElementById('ed_defaultVersion') ? document.getElementById('ed_defaultVersion').value.trim() : '',
+      notesUrl:             document.getElementById('ed_notesUrl').value,
+      whatsNewUrl:          document.getElementById('ed_whatsNewUrl').value.trim(),
+      htmlUpper:            getEditorContent('ed_upper_editor'),
+      htmlLower:            stripRenderedLinks(getEditorContent('ed_lower_editor')),
+      optionalBlock1Html:   getEditorContent('ed_optBlock1_editor'),
+      optionalBlock2Html:   getEditorContent('ed_optBlock2_editor'),
+      optionalBlock1Label:  (document.getElementById('ed_optBlock1Label') ? document.getElementById('ed_optBlock1Label').value.trim() : ''),
+      optionalBlock2Label:  (document.getElementById('ed_optBlock2Label') ? document.getElementById('ed_optBlock2Label').value.trim() : ''),
+      allowsRegionSegment:  (document.getElementById('ed_allowsRegionSegment') ? document.getElementById('ed_allowsRegionSegment').checked : false)
+    };
+
+    if (!payload.label.trim()) { alert('Validation failure: Template Name is required.'); return; }
+    if (targetKey) {
+      if (!confirm("Are you sure you want to overwrite the existing settings for '" + targetLabel + "'?")) return;
+    }
+
+    saveBtn.innerText = 'Processing Write Execution...';
+    saveBtn.disabled  = true;
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (res && res.status === 'error') {
+          alert(res.message);
+          saveBtn.innerHTML = targetKey ? '&#128221; Overwrite Existing Template Settings' : '&#128190; Save as New Template Reference';
+          saveBtn.disabled  = false;
+        } else {
+          alert('Configuration saved successfully!');
+          saveBtn.disabled = false;
+          refreshAppConfigurations();
+        }
+      })
+      .withFailureHandler(function(err) {
+        alert('Network error: ' + err.toString());
+        saveBtn.innerHTML = targetKey ? '&#128221; Overwrite Existing Template Settings' : '&#128190; Save as New Template Reference';
+        saveBtn.disabled  = false;
+      })
+      .saveSpreadsheetTemplate(payload);
+  }
+
+  function refreshAppConfigurations() {
+    var currentActiveKey = document.getElementById('ed_key').value;
+    google.script.run
+      .withSuccessHandler(function(response) {
+        populateDynamicTemplatesDropdown(response);
+        syncEditorTemplateDropdown();
+        if (currentActiveKey) {
+          var editorSelector = document.getElementById('editorTemplateSelect');
+          if (editorSelector) editorSelector.value = currentActiveKey;
+        }
+        loadTemplateToEditorForm();
+      })
+      .getSpreadsheetTemplatesConfig();
+  }
+
+  // -------------------------------------------------------------------
+  // GLOBAL SETTINGS
+  // -------------------------------------------------------------------
+  function loadGlobalSettingsToForm() {
+    var btn = document.getElementById('saveGlobalSettingsBtn');
+    if (btn) { btn.innerText = 'Loading...'; btn.disabled = true; }
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (res && res.status === 'success') {
+          setEditorContent('gs_unsub_editor', res.unsubscribeFooterHtml || '');
+        } else {
+          alert('Failed to load global settings: ' + (res ? res.message : 'Unknown error'));
+        }
+        if (btn) { btn.innerHTML = '&#128190; Save Global Settings'; btn.disabled = false; }
+      })
+      .withFailureHandler(function(err) {
+        alert('Network error loading global settings: ' + err.toString());
+        if (btn) { btn.innerHTML = '&#128190; Save Global Settings'; btn.disabled = false; }
+      })
+      .getGlobalSettings();
+  }
+
+  function submitGlobalSettings() {
+    var btn = document.getElementById('saveGlobalSettingsBtn');
+    if (btn) { btn.innerText = 'Saving...'; btn.disabled = true; }
+
+    var payload = {
+      unsubscribeFooterHtml: getEditorContent('gs_unsub_editor')
+    };
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (res && res.status === 'error') {
+          alert('Save failed: ' + res.message);
+          if (btn) { btn.innerHTML = '&#128190; Save Global Settings'; btn.disabled = false; }
+        } else {
+          if (btn) {
+            btn.classList.add('success-state');
+            btn.innerHTML = '&#10003; Saved Successfully!';
+            btn.disabled  = false;
+            setTimeout(function() {
+              btn.classList.remove('success-state');
+              btn.innerHTML = '&#128190; Save Global Settings';
+            }, 2500);
+          }
+        }
+      })
+      .withFailureHandler(function(err) {
+        alert('Network error saving global settings: ' + err.toString());
+        if (btn) { btn.innerHTML = '&#128190; Save Global Settings'; btn.disabled = false; }
+      })
+      .saveGlobalSettings(payload);
+  }
+
+  // -------------------------------------------------------------------
+  // WYSIWYG
+  // -------------------------------------------------------------------
+  var _activeEditorTarget = null;
+  var _savedRange         = null;
+  var _savedSelectedText  = "";
+
+  function editorCommand(editorId, command) {
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    document.execCommand(command, false, null);
+  }
+
+  function insertEditorBreak(editorId, tagType) {
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    var html = (tagType === 'hr')
+      ? '<hr style="border: 0; border-top: 1px solid #dcdcdc; margin-top: 6px; margin-bottom: 6px;"/>'
+      : '<br/>';
+    document.execCommand('insertHTML', false, html);
+  }
+
+  function insertEditorToken(editorId, tokenValue) {
+    if (!tokenValue) return;
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    document.execCommand('insertHTML', false, tokenValue);
+  }
+
+  function saveEditorSelection(editorId) {
+    var sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) _savedRange = sel.getRangeAt(0).cloneRange();
+    _activeEditorTarget = editorId;
+  }
+
+  function restoreEditorSelection() {
+    if (!_savedRange || !_activeEditorTarget) return;
+    var el = document.getElementById(_activeEditorTarget);
+    if (!el) return;
+    el.focus();
+    var sel = window.getSelection();
+    if (sel) { sel.removeAllRanges(); sel.addRange(_savedRange); }
+  }
+
+  function getEditorContent(editorId) {
+    var el = document.getElementById(editorId);
+    return el ? el.innerHTML : '';
+  }
+
+  function setEditorContent(editorId, htmlString) {
+    var el = document.getElementById(editorId);
+    if (el) el.innerHTML = htmlString || '';
+  }
+
+  // -------------------------------------------------------------------
+  // FONT FAMILY
+  // -------------------------------------------------------------------
+  function applyFontFamily(editorId, familyValue) {
+    if (!familyValue) return;
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    document.execCommand('fontName', false, familyValue);
+  }
+
+  // -------------------------------------------------------------------
+  // HEADING / PARAGRAPH STYLE
+  // -------------------------------------------------------------------
+  function applyHeadingStyle(editorId, tag) {
+    if (!tag) return;
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    document.execCommand('formatBlock', false, tag);
+  }
+
+  // -------------------------------------------------------------------
+  // TEXT COLOR
+  // -------------------------------------------------------------------
+  function applyTextColor(editorId, colorValue) {
+    if (!colorValue) return;
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    document.execCommand('foreColor', false, colorValue);
+  }
+
+  // -------------------------------------------------------------------
+  // HIGHLIGHT / BACKGROUND COLOR
+  // -------------------------------------------------------------------
+  function applyHighlightColor(editorId, colorValue) {
+    if (!colorValue) return;
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    document.execCommand('hiliteColor', false, colorValue);
+  }
+
+  // -------------------------------------------------------------------
+  // INDENT / OUTDENT
+  // -------------------------------------------------------------------
+  function indentEditor(editorId, direction) {
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    document.execCommand(direction === 'in' ? 'indent' : 'outdent', false, null);
+  }
+
+  // -------------------------------------------------------------------
+  // INSERT TABLE
+  // -------------------------------------------------------------------
+  function insertTable(editorId, rows, cols) {
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    rows = rows || 2;
+    cols = cols || 2;
+    var tableHtml = '<table style="border-collapse: collapse; width: 100%; margin: 8px 0;">';
+    for (var r = 0; r < rows; r++) {
+      tableHtml += '<tr>';
+      for (var c = 0; c < cols; c++) {
+        tableHtml += '<td style="border: 1px solid #cbd5e1; padding: 6px 10px;'
+          + ' font-family: Arial, sans-serif; font-size: 13px; min-width: 60px;">'
+          + '&nbsp;</td>';
+      }
+      tableHtml += '</tr>';
+    }
+    tableHtml += '</table><br/>';
+    document.execCommand('insertHTML', false, tableHtml);
+  }
+
+  // -------------------------------------------------------------------
+  // FONT SIZE
+  // -------------------------------------------------------------------
+  function applyFontSize(editorId, sizeValue) {
+    if (!sizeValue) return;
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    var selectedText = sel.toString();
+    if (selectedText.length > 0) {
+      document.execCommand(
+        'insertHTML', false,
+        '<span style="font-size: ' + sizeValue + ';">' + selectedText + '</span>'
+      );
+    } else {
+      document.execCommand(
+        'insertHTML', false,
+        '<span style="font-size: ' + sizeValue + ';">&#8203;</span>'
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // CLEAR FORMATTING
+  // -------------------------------------------------------------------
+  function clearEditorFormatting(editorId) {
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    if (sel.toString().length === 0) return;
+
+    document.execCommand('removeFormat', false, null);
+
+    var range    = sel.getRangeAt(0);
+    var fragment = range.cloneContents();
+    var tempDiv  = document.createElement('div');
+    tempDiv.appendChild(fragment);
+
+    var spans = tempDiv.querySelectorAll('span');
+    for (var i = 0; i < spans.length; i++) {
+      var span     = spans[i];
+      var textNode = document.createTextNode(span.textContent);
+      span.parentNode.replaceChild(textNode, span);
+    }
+
+    range.deleteContents();
+    range.insertNode(tempDiv);
+
+    range.setStartAfter(tempDiv);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function alignEditor(editorId, alignment) {
+    var el = document.getElementById(editorId);
+    if (!el) return;
+    el.focus();
+    document.execCommand('justify' + alignment, false, null);
+  }
+
+  // -------------------------------------------------------------------
+  // LINK MODAL
+  // -------------------------------------------------------------------
+  function openLinkModal(editorId) {
+    var sel = window.getSelection();
+
+    if (sel && sel.rangeCount > 0) {
+      _savedRange        = sel.getRangeAt(0).cloneRange();
+      _savedSelectedText = sel.toString();
+    } else {
+      _savedRange        = null;
+      _savedSelectedText = "";
+    }
+
+    _activeEditorTarget = editorId;
+
+    document.getElementById('modalLinkLabel').value = _savedSelectedText;
+    document.getElementById('modalLinkUrl').value   = '';
+    document.getElementById('editorLinkModal').classList.add('open');
+    setTimeout(function() { document.getElementById('modalLinkUrl').focus(); }, 50);
+  }
+
+  function closeLinkModal() {
+    document.getElementById('editorLinkModal').classList.remove('open');
+    _savedRange         = null;
+    _savedSelectedText  = "";
+    _activeEditorTarget = null;
+  }
+
+  function confirmInsertLink() {
+    var label = document.getElementById('modalLinkLabel').value.trim();
+    var url   = document.getElementById('modalLinkUrl').value.trim();
+    if (!url)   { alert('A URL is required.'); return; }
+    if (!label) { label = url; }
+
+    var targetEditorId = _activeEditorTarget;
+    var savedRange     = _savedRange;
+
+    closeLinkModal();
+
+    if (!targetEditorId) return;
+
+    var el = document.getElementById(targetEditorId);
+    if (!el) return;
+
+    var linkNode           = document.createElement('a');
+    linkNode.href          = url;
+    linkNode.target        = '_blank';
+    linkNode.setAttribute('clicktracking', 'off');
+    linkNode.style.cssText = 'color: #007bff; text-decoration: none;';
+    linkNode.textContent   = label;
+
+    el.focus();
+
+    if (savedRange) {
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedRange);
+
+      savedRange.deleteContents();
+      savedRange.insertNode(linkNode);
+
+      var newRange = document.createRange();
+      newRange.setStartAfter(linkNode);
+      newRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+    } else {
+      var linkHtml = '<a href="' + url + '" clicktracking="off" target="_blank"'
+        + ' style="color: #007bff; text-decoration: none;">' + label + '</a>';
+      document.execCommand('insertHTML', false, linkHtml);
+    }
+  }
+</script>
