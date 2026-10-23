@@ -8,6 +8,9 @@
  *          | points: doGet(), onOpen(), launchGeneratorDashboardModal().
  *          | ProcessPush.gs is deleted as part of Phase 2 -- its remaining
  *          | functions now live in SendGridApi.gs and StatusCastApi.gs.
+ *   P2-02 | Added include() helper to support HtmlService file splitting.
+ *          | Index.html now loads AppScript.html via <?!= include('AppScript'); ?>
+ *          | keeping the served HTML payload well under sandbox size limits.
  *
  * DEPENDENCIES:
  *   None. HtmlService and SpreadsheetApp are GAS globals.
@@ -53,4 +56,78 @@ function launchGeneratorDashboardModal() {
     .setWidth(1250)
     .setHeight(850);
   SpreadsheetApp.getUi().showModalDialog(uiMarkup, ' ');
+}
+
+
+// ===========================================================================
+// HTML INCLUDE HELPER
+// ===========================================================================
+
+/**
+ * Includes the raw content of an HTML file into a served HtmlTemplate.
+ * Called inside Index.html via the scriptlet tag: <?!= include('AppScript'); ?>
+ *
+ * This is the standard GAS pattern for splitting large HTML apps across
+ * multiple files. HtmlService stitches them together at serve time before
+ * the payload is sent to the browser, so the browser receives one complete
+ * HTML document with no extra network requests.
+ *
+ * USAGE IN Index.html:
+ *   <?!= include('AppScript'); ?>
+ *
+ * @param {string} filename  GAS project file name without extension.
+ * @return {string}          Raw HTML/CSS/JS content of the named file.
+ */
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+/**
+ * Reads global app settings from Script Properties.
+ * Currently owns: UnsubscribeFooterHtml
+ * @return {Object} status response with settings payload.
+ */
+function getGlobalSettings() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    return {
+      status: 'success',
+      unsubscribeFooterHtml: props.getProperty('UnsubscribeFooterHtml') || getDefaultUnsubscribeHtml()
+    };
+  } catch (err) {
+    Logger.log(err.stack);
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+/**
+ * Saves global app settings to Script Properties.
+ * @param {Object} payload  { unsubscribeFooterHtml: string }
+ * @return {Object} status response.
+ */
+function saveGlobalSettings(payload) {
+  try {
+    if (!payload || typeof payload.unsubscribeFooterHtml === 'undefined') {
+      throw new Error("Invalid payload: unsubscribeFooterHtml is required.");
+    }
+    PropertiesService.getScriptProperties()
+      .setProperty('UnsubscribeFooterHtml', payload.unsubscribeFooterHtml);
+    return { status: 'success' };
+  } catch (err) {
+    Logger.log(err.stack);
+    return { status: 'error', message: err.toString() };
+  }
+}
+
+/**
+ * Returns the canonical default unsubscribe footer HTML.
+ * Single source of truth -- referenced by both the renderer fallback
+ * and the Global Settings UI initial state.
+ * @return {string}
+ */
+function getDefaultUnsubscribeHtml() {
+  return 'You are receiving this email as you are subscribed to receive system availability emails'
+    + ' on your Vault user profile, or are a part of a distrbution list within your organization.'
+    + ' To <a href="https://platform.veevavault.help/en/lr/7239/#notification-email">unsubscribe</a>'
+    + ' from future notifications, please contact your system administrator.';
 }
