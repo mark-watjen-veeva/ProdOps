@@ -1,3 +1,6 @@
+function myFunction() {
+  
+}
 /**
  * FILE: TimeUtil.gs
  * LAYER: Utility
