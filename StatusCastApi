@@ -31,6 +31,12 @@
  *   Sheets API read on every Trust submission. A defensive fallback to
  *   fetchPodDataFromSheet() is kept for older client payload versions.
  *
+ * GROUP ID RESOLUTION:
+ *   Three stable StatusCast subscriber group IDs are stored in Script Properties:
+ *     StatusCastGroupUS -> Vault-US PODs (always included)
+ *     StatusCastGroupEU -> Vault-EU PODs (included when EU PODs present)
+ *     StatusCastGroupAP -> Vault-AP PODs (included when APAC PODs present)
+ *
  * INCIDENT TYPES:
  *   Maintenance       -> ScheduledMaintenance, window anchored +24h to +28h from now.
  *   Unavailable       -> ServiceUnavailable, Investigating post.
@@ -150,30 +156,62 @@ function processTrustPushRequest(formData) {
     // -- Step 3: Build incident metadata -------------------------------------
     var now            = new Date();
     var currentIsoDate = now.toISOString();
-    var timeToken      = now.toTimeString().split(' ')[0];
 
     var rawVersion       = formData.version || "26R1.0.22";
     var statusType       = formData.statusCastType || "Maintenance";
     var cleanReleaseType = formData.releaseType || "Maintenance Only";
+    var cleanProduct     = (formData.product && String(formData.product).trim() !== "")
+      ? String(formData.product).trim()
+      : "Vault";
     var defaultSubject   = (cleanReleaseType === "Downtime Required")
       ? "Veeva Release Notification"
-      : "Veeva Vault Maintenance Release Notification";
+      : ("Veeva " + cleanProduct + " Maintenance Release Notification");
 
     var baseTitle   = formData.emailTitle  || defaultSubject;
     var baseSubject = formData.subjectLine || defaultSubject;
 
-    var shortTag = "UNV";
-    if (statusType === "Performance Degraded" || statusType === "Performance Degradation") shortTag = "DEG";
-    if (statusType === "Maintenance")   shortTag = "MNT";
-    if (statusType === "Informational") shortTag = "INF";
-
-    var uniqueTitle       = shortTag + ": " + baseTitle.trim() + " - " + rawVersion + " (" + timeToken + ")";
-    var customSubjectLine = baseSubject.trim() + " - " + rawVersion;
+    // Title: clean label only, no shortTag prefix, no timestamp suffix.
+    // Subject: use the assembled subjectLine from the client as-is.
+    var uniqueTitle       = baseTitle.trim() + " - " + rawVersion;
+    var customSubjectLine = baseSubject.trim();
 
     // -- Step 4: Render HTML body for the incident post ----------------------
-    var structuredEmailHtmlMessage = generateMasterHtmlLayout(formData);
+    // trustMode: true suppresses banners and footer verbiage in the renderer.
+    var trustFormData = {};
+    for (var k in formData) { if (formData.hasOwnProperty(k)) trustFormData[k] = formData[k]; }
+    trustFormData.trustMode = true;
+    trustFormData.templateKey = formData.releaseType || formData.templateKey || "";  
+    var structuredEmailHtmlMessage = generateMasterHtmlLayout(trustFormData);
 
-    // -- Step 5: Build incident payload --------------------------------------
+    // -- Step 5: Resolve affected groups from region detection ---------------
+    // Group IDs are stable and stored in Script Properties.
+    // US group is always included. EU and AP are included only when their
+    // region label appears in the compiled affectedPods text.
+    var groupIdUS = scriptProperties.getProperty('StatusCastGroupUS');
+    var groupIdEU = scriptProperties.getProperty('StatusCastGroupEU');
+    var groupIdAP = scriptProperties.getProperty('StatusCastGroupAP');
+
+    var cleanPodsForRegion = affectedPodsText
+      .replace(/<\/?[^>]+(>|$)/g, " ")
+      .replace(/[\r\n]+/g, " ")
+      .trim();
+
+ var resolvedGroupIds = [];
+
+ if (groupIdUS) {
+      resolvedGroupIds.push(parseInt(groupIdUS, 10));
+    }
+    if (groupIdEU && /\bEU\b/i.test(cleanPodsForRegion)) {
+      resolvedGroupIds.push(parseInt(groupIdEU, 10));
+    }
+    if (groupIdAP && /\bAPAC\b/i.test(cleanPodsForRegion)) {
+      resolvedGroupIds.push(parseInt(groupIdAP, 10));
+    }
+    
+   Logger.log("[TRUST] Resolved affectedGroups (typeof first): " + typeof resolvedGroupIds[0] + " | value: " + resolvedGroupIds[0]);
+    Logger.log("[TRUST] Resolved affectedGroups JSON: " + JSON.stringify(resolvedGroupIds));
+    
+    // -- Step 6: Build incident payload --------------------------------------
     var incidentPayload = {
       title:              uniqueTitle,
       subject:            customSubjectLine,
@@ -182,7 +220,7 @@ function processTrustPushRequest(formData) {
       sendNotifications:  false,
       externalId:         "",
       affectedComponents: realComponentIds,
-      affectedGroups:     [],
+      affectedGroups:     resolvedGroupIds,
       customFields:       [],
       posts: [{
         text:        structuredEmailHtmlMessage,
@@ -205,7 +243,6 @@ function processTrustPushRequest(formData) {
 
     } else if (statusType === "Maintenance") {
       // Maintenance window anchored +24h to +28h from now.
-      // See Open Question Q2 in design doc re: deriving from release date.
       var startWindow = new Date(now.getTime() + (24 * 60 * 60 * 1000));
       var endWindow   = new Date(now.getTime() + (28 * 60 * 60 * 1000));
 
@@ -231,7 +268,7 @@ function processTrustPushRequest(formData) {
       incidentPayload.posts[0].postType  = "Informational";
     }
 
-    // -- Step 6: Submit to StatusCast API ------------------------------------
+    // -- Step 7: Submit to StatusCast API ------------------------------------
     var incidentUrl     = "https://" + String(fullDomain).trim() + "/api/v4/incident";
     var incidentOptions = {
       method:             "post",
@@ -243,6 +280,7 @@ function processTrustPushRequest(formData) {
 
     var response     = UrlFetchApp.fetch(incidentUrl, incidentOptions);
     var responseCode = response.getResponseCode();
+    Logger.log("[TRUST] StatusCast response HTTP " + responseCode + ": " + response.getContentText().substring(0, 500));
 
     if (responseCode >= 400) {
       return {
