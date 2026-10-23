@@ -13,6 +13,50 @@
  *          | single setValues() call. Updates to existing rows still use
  *          | targeted setValues() (one call per matched row) which is correct
  *          | because each row may land at a different sheet position.
+ *
+ * PHASE 2 FIXES APPLIED:
+ *   P2-01 | getSpreadsheetTemplatesConfig: removed orphaned defaultDowntime
+ *          | property assignment that was floating outside the object literal.
+ *          | This caused a silent parse failure in the GAS runtime, returning
+ *          | an empty or broken registry, which stripped htmlUpper/htmlLower
+ *          | from all activeMatch lookups in the client -- causing the header
+ *          | HTML block to vanish from the preview pane when any filter was
+ *          | applied. defaultDowntime is now correctly declared as a local
+ *          | variable and included as a proper property inside the push object.
+ *
+ * PHASE 3 FIXES APPLIED (Region Only Segment Picker -- Vault gate):
+ *   P3-01 | fetchPodDataFromSheet: Column L (Regional SendGrid Segment Name)
+ *          | is now actually read into podMetadata as regionalSegmentName.
+ *          | Previously this field was never populated at all, so the client's
+ *          | data-regional-segment-name attribute (AppScript.html) was always
+ *          | blank for every POD regardless of what was entered in the sheet --
+ *          | the Region Only targeting path silently resolved zero recipients
+ *          | for every product, including Vault.
+ *   P3-02 | Corrected a stale inline comment on idxPodGroup. The index (1)
+ *          | has always pointed at Column B ("Vault Pod Groups" segment name),
+ *          | not Column L as the old comment incorrectly stated. Column L is
+ *          | now its own separate, correctly-labeled index (idxRegionalSegment).
+ *          | Business rule (enforced client-side in AppScript.html): the
+ *          | Region Only / regional-segment-name targeting path only ever
+ *          | applies to Vault PODs. Non-Vault products (LIMS, RegOne, Safety)
+ *          | always resolve via their individual Column B segment name,
+ *          | regardless of region selection.
+ *
+ * PHASE 4 FIX APPLIED (Optional Footer Block regression):
+ *   P4-06 | getSpreadsheetTemplatesConfig / saveSpreadsheetTemplate: added
+ *          | Columns M-Q (optionalBlock1Html, optionalBlock2Html,
+ *          | optionalBlock1Label, optionalBlock2Label, allowsRegionSegment).
+ *          | Template Studio (AppScript.html submitTemplateConfigToServer)
+ *          | has sent these five fields in its save payload since the P4-04
+ *          | Optional Block feature was added client-side, but this file's
+ *          | column map was never extended to match -- they were silently
+ *          | dropped on write and always came back undefined on read. Every
+ *          | selection of the PR Block / GR Block radio in the Comm Generator
+ *          | therefore resolved formData.activeOptionalBlockHtml to an empty
+ *          | string in AppScript.html's updatePreview()/submitData(), and
+ *          | EmailRenderer.gs correctly (and silently) stripped the
+ *          | [[OPTIONAL_BLOCK]] token. Both read and write paths, and every
+ *          | hardcoded column-count argument (12), are now widened to 17.
  */
 
 
@@ -22,8 +66,11 @@
 
 /**
  * Reads active POD profiles from the POD Profiles configuration sheet.
- * Excludes rows where: POD name is blank, Vault Pod Group is blank,
- * product is Vault Basics or LIMS Basics, or release value is versioned/dated.
+ * Excludes rows where: POD name is blank, product is Vault Basics or LIMS
+ * Basics, or release value is versioned/dated.
+ * PODs with no Column B value are flagged "Unmapped" so the client can
+ * exclude them from SendGrid segment payloads while still showing them
+ * in the filter dashboard.
  *
  * @return {Object} status response containing:
  *   individualPods  {Array<string>}  Sorted list of active POD names.
@@ -57,14 +104,18 @@ function fetchPodDataFromSheet() {
     }
 
     // Column index constants -- update here if sheet schema changes.
-    var idxRelease  = 0;   // Column A: Release
-    var idxPod      = 2;   // Column C: POD name
-    var idxProduct  = 3;   // Column D: Product
-    var idxRegion   = 8;   // Column I: Region
-    var idxUpgrade  = 9;   // Column J: Upgrade Mode
-    var idxTrustId  = 10;  // Column K: StatusCast Component ID
-    var idxPodGroup = 11;  // Column L: Vault Pod Groups (SendGrid recipient list mapping)
-    // BUG FIX: was incorrectly set to 1 (Column B) in Phase 1. Column L = index 11.
+    var idxRelease          = 0;   // Column A: Release
+    var idxPodGroup         = 1;   // Column B: Vault Pod Groups (SendGrid segment name)
+    var idxPod              = 2;   // Column C: POD name
+    var idxProduct          = 3;   // Column D: Product
+    var idxDeploymentTime   = 5;   // Column F: Deployment Time
+    var idxRegion           = 8;   // Column I: Region
+    var idxUpgrade          = 9;   // Column J: Upgrade Mode
+    var idxTrustId          = 10;  // Column K: StatusCast Component ID
+    var idxRegionalSegment  = 11;  // Column L: Regional SendGrid Segment Name
+                                    //           (Vault General Release only --
+                                    //           see processPushRequest in
+                                    //           SendGridApi.gs for the gate)
 
     var individualPods = [];
     var podMetadata    = {};
@@ -81,18 +132,18 @@ function fetchPodDataFromSheet() {
       // Drop rows with no POD name -- nothing to render.
       if (!podName) continue;
 
-      // PODs with no Column L value are kept for the UI (checklist + filter buttons)
-      // but flagged "Unmapped" so submitData() in the client correctly excludes them
-      // from the selectedPodGroups array sent to SendGrid.
-      // Hard-dropping empty podGroup rows here caused EU/APAC/Vault regions to vanish
-      // from the filter dashboard -- regression introduced in the Phase 1 Column L fix.
-      if (!podGroupVal) podGroupVal = "Unmapped";
+     // PODs with no Column B value are excluded entirely -- no segment
+      // mapping means no valid recipients, so the POD should not appear
+      // in the checklist or be selectable for any dispatch.
+      if (!podGroupVal) continue;
 
-      var relVal   = row[idxRelease]  ? String(row[idxRelease]).trim()  : "";
-      var prodVal  = row[idxProduct]  ? String(row[idxProduct]).trim()  : "";
-      var regVal   = row[idxRegion]   ? String(row[idxRegion]).trim()   : "";
-      var upgVal   = row[idxUpgrade]  ? String(row[idxUpgrade]).trim()  : "";
-      var trustVal = row[idxTrustId]  ? String(row[idxTrustId]).trim()  : "";
+      var relVal           = row[idxRelease]         ? String(row[idxRelease]).trim()         : "";
+      var prodVal          = row[idxProduct]         ? String(row[idxProduct]).trim()         : "";
+      var deployTimeVal    = row[idxDeploymentTime]  ? String(row[idxDeploymentTime]).trim()  : "";
+      var regVal           = row[idxRegion]          ? String(row[idxRegion]).trim()          : "";
+      var upgVal           = row[idxUpgrade]         ? String(row[idxUpgrade]).trim()         : "";
+      var trustVal         = row[idxTrustId]         ? String(row[idxTrustId]).trim()         : "";
+      var regionalSegVal   = row[idxRegionalSegment] ? String(row[idxRegionalSegment]).trim() : "";
 
       // Exclude Basics product lines -- no external comms needed.
       if (prodVal === "Vault Basics" || prodVal === "LIMS Basics") continue;
@@ -103,12 +154,19 @@ function fetchPodDataFromSheet() {
       individualPods.push(podName);
 
       podMetadata[podName] = {
-        region:      regVal   || "Unknown",
-        release:     relVal   || "General",
-        product:     prodVal  || "Vault",
-        upgradeMode: upgVal   || "None",
-        trustId:     trustVal,
-        podGroup:    podGroupVal
+        region:              regVal        || "Unknown",
+        release:             relVal        || "General",
+        product:             prodVal       || "Vault",
+        upgradeMode:         upgVal        || "None",
+        trustId:             trustVal,
+        podGroup:            podGroupVal,
+        // Only ever meaningful for Vault General Release PODs -- blank for
+        // every other product/release combination by design. The client
+        // (AppScript.html) gates its use on product === "Vault"; a non-Vault
+        // POD never consults this value even if the sheet happens to have
+        // one entered.
+        regionalSegmentName: regionalSegVal,
+        deploymentTime:      deployTimeVal || ""
       };
 
       if (regVal)  regionsSet[regVal]   = true;
@@ -142,8 +200,23 @@ function fetchPodDataFromSheet() {
 
 /**
  * Reads the Email Templates sheet into a client-consumable registry array.
- * Uses getValues() (not getDisplayValues) so numeric and boolean types
- * are preserved for the downtime flag and staggered hours columns.
+ * Uses getValues() (not getDisplayValues) so numeric and boolean types are
+ * preserved for the downtime flag and staggered hours columns.
+ *
+ * CRITICAL FIX (P2-01):
+ *   The defaultDowntime value is now extracted into a local variable BEFORE
+ *   the push call, then referenced as a proper object property inside the
+ *   push literal. The previous orphaned property syntax caused a silent GAS
+ *   parse failure that broke the entire registry response, stripping
+ *   htmlUpper and htmlLower from every activeMatch lookup on the client.
+ *
+ * FIX (P4-06):
+ *   Added Columns M-Q: optionalBlock1Html, optionalBlock2Html,
+ *   optionalBlock1Label, optionalBlock2Label, allowsRegionSegment. These were
+ *   already being sent by Template Studio's save payload but had no reader
+ *   column assigned, so they always came back undefined -- root cause of the
+ *   Optional Footer Block regression (PR Block / GR Block selecting in the
+ *   UI but never appearing in the rendered preview or dispatched draft).
  *
  * @return {Object} status response containing:
  *   templates {Array<Object>} Full template registry for the client dropdown.
@@ -169,16 +242,26 @@ function getSpreadsheetTemplatesConfig() {
     }
 
     // Column index constants -- update here if sheet schema changes.
-    var idxKey       = 0;  // Column A: Unique key / slug
-    var idxLabel     = 1;  // Column B: Dropdown display label
-    var idxSubject   = 2;  // Column C: Default email subject
-    var idxTitle     = 3;  // Column D: Default email title
-    //                  4  -- Column E: unused placeholder
-    var idxUpper     = 5;  // Column F: htmlUpper (header HTML block)
-    var idxLower     = 6;  // Column G: htmlLower (footer HTML block)
-    var idxDowntime  = 7;  // Column H: requiresDowntime flag
-    var idxNotesUrl  = 8;  // Column I: Release notes URL
-    var idxStaggered = 9;  // Column J: Staggered window hours
+    var idxKey                  = 0;   // Column A: Unique key / slug
+    var idxLabel                = 1;   // Column B: Dropdown display label
+    var idxSubject               = 2;   // Column C: Default email subject
+    var idxTitle                 = 3;   // Column D: Default email title
+    var idxDefaultDowntime       = 4;   // Column E: Default estimated downtime
+    var idxUpper                 = 5;   // Column F: htmlUpper
+    var idxLower                 = 6;   // Column G: htmlLower
+    var idxDowntime              = 7;   // Column H: requiresDowntime flag
+    var idxNotesUrl              = 8;   // Column I: Release notes URL
+    var idxWhatsNewUrl           = 9;   // Column J: What's New URL
+    var idxStaggered             = 10;  // Column K: Staggered window hours
+    var idxDefaultVersion        = 11;  // Column L: Default Release Version
+    // P4-06 FIX: these five were sent by Template Studio but never had a
+    // column assigned on read, so they always came back undefined --
+    // root cause of the Optional Footer Block regression.
+    var idxOptionalBlock1Html    = 12;  // Column M: Optional Block 1 HTML (PR Block)
+    var idxOptionalBlock2Html    = 13;  // Column N: Optional Block 2 HTML (GR Block)
+    var idxOptionalBlock1Label   = 14;  // Column O: Optional Block 1 Label
+    var idxOptionalBlock2Label   = 15;  // Column P: Optional Block 2 Label
+    var idxAllowsRegionSegment   = 16;  // Column Q: Region Only Segment Picker flag
 
     var templatesRegistry = [];
 
@@ -191,7 +274,7 @@ function getSpreadsheetTemplatesConfig() {
       var isDowntimeTrue = (rawDowntime === "true" || rawDowntime === "yes" || rawDowntime === "1");
 
       var sheetUrlValue = row[idxNotesUrl] ? String(row[idxNotesUrl]).trim() : "";
-      var cleanUrl = sheetUrlValue;
+      var cleanUrl      = sheetUrlValue;
       if (!sheetUrlValue
           || sheetUrlValue.toLowerCase() === "false"
           || sheetUrlValue.toLowerCase() === "undefined") {
@@ -201,19 +284,45 @@ function getSpreadsheetTemplatesConfig() {
       var staggeredHours = row[idxStaggered] ? Number(row[idxStaggered]) : 0;
       if (isNaN(staggeredHours)) staggeredHours = 0;
 
+      // Extract defaultDowntime into a local variable BEFORE the push literal.
+      // This is the critical fix -- never place a property assignment as a
+      // floating statement between var declarations and an object literal.
+      var defaultDowntimeVal = row[idxDefaultDowntime]
+        ? String(row[idxDefaultDowntime]).trim()
+        : "90 Minutes";
+
+      // P4-06 FIX: same explicit-extraction pattern as defaultDowntimeVal
+      // above, applied to the allowsRegionSegment boolean flag.
+      var rawAllowsRegionSegment = row[idxAllowsRegionSegment]
+        ? String(row[idxAllowsRegionSegment]).toLowerCase().trim()
+        : "";
+      var isAllowsRegionSegmentTrue = (rawAllowsRegionSegment === "true" || rawAllowsRegionSegment === "yes" || rawAllowsRegionSegment === "1");
+
       templatesRegistry.push({
-        key:                 key,
-        label:               (row[idxLabel] ? String(row[idxLabel]).trim() : "") || key,
-        Default_Subject:     row[idxSubject] ? String(row[idxSubject]).trim() : "",
-        subject:             row[idxSubject] ? String(row[idxSubject]).trim() : "",
-        Default_Title:       row[idxTitle]   ? String(row[idxTitle]).trim()   : "",
-        title:               row[idxTitle]   ? String(row[idxTitle]).trim()   : "",
-        requiresDowntime:    isDowntimeTrue,
-        htmlUpper:           row[idxUpper]   ? String(row[idxUpper])          : "",
-        htmlLower:           row[idxLower]   ? String(row[idxLower])          : "",
-        notesUrl:            cleanUrl,
-        releaseNotesLink:    cleanUrl,
-        staggeredWindowHours: staggeredHours
+        key:                  key,
+        label:                (row[idxLabel] ? String(row[idxLabel]).trim() : "") || key,
+        Default_Subject:      row[idxSubject] ? String(row[idxSubject]).trim() : "",
+        subject:              row[idxSubject] ? String(row[idxSubject]).trim() : "",
+        Default_Title:        row[idxTitle]   ? String(row[idxTitle]).trim()   : "",
+        title:                row[idxTitle]   ? String(row[idxTitle]).trim()   : "",
+        defaultDowntime:      defaultDowntimeVal,
+        requiresDowntime:     isDowntimeTrue,
+        htmlUpper:            row[idxUpper]   ? String(row[idxUpper])          : "",
+        htmlLower:            row[idxLower]   ? String(row[idxLower])          : "",
+        notesUrl:             cleanUrl,
+        releaseNotesLink:     cleanUrl,
+        whatsNewUrl:          (row[idxWhatsNewUrl] && String(row[idxWhatsNewUrl]).trim() !== "" && String(row[idxWhatsNewUrl]).toLowerCase() !== "false") ? String(row[idxWhatsNewUrl]).trim() : "",
+        staggeredWindowHours: staggeredHours,
+        defaultVersion:       (row[idxDefaultVersion] && String(row[idxDefaultVersion]).trim() !== "") ? String(row[idxDefaultVersion]).trim() : "",
+        // P4-06 FIX: previously missing entirely -- root cause of the
+        // Optional Footer Block regression reported against the Comm
+        // Generator (PR Block / GR Block selected in the UI but never
+        // appearing in the rendered preview or dispatched draft).
+        optionalBlock1Html:   row[idxOptionalBlock1Html]  ? String(row[idxOptionalBlock1Html])         : "",
+        optionalBlock2Html:   row[idxOptionalBlock2Html]  ? String(row[idxOptionalBlock2Html])         : "",
+        optionalBlock1Label:  row[idxOptionalBlock1Label] ? String(row[idxOptionalBlock1Label]).trim() : "",
+        optionalBlock2Label:  row[idxOptionalBlock2Label] ? String(row[idxOptionalBlock2Label]).trim() : "",
+        allowsRegionSegment:  isAllowsRegionSegmentTrue
       });
     }
 
@@ -238,6 +347,14 @@ function getSpreadsheetTemplatesConfig() {
  *   - Brand new rows -> collected into newRowsBatch[], then written once with
  *     a single setValues() call after the loop. Never appendRow() inside a loop.
  *
+ * FIX (P4-06):
+ *   Widened every hardcoded column-count argument from 12 to 17 (via the new
+ *   TEMPLATE_COLUMN_COUNT constant) and added Columns M-Q to mappedRow so
+ *   optionalBlock1Html, optionalBlock2Html, optionalBlock1Label,
+ *   optionalBlock2Label, and allowsRegionSegment -- already present in every
+ *   save payload sent by Template Studio -- are finally persisted to the
+ *   sheet instead of being silently dropped.
+ *
  * @param {Object|Array} payload  Single template object or array of objects.
  * @return {Object} status response object.
  */
@@ -253,9 +370,14 @@ function saveSpreadsheetTemplate(payload) {
       );
     }
 
+    // P4-06 FIX: widened from 12 to 17 columns to include the optional
+    // block fields (Columns M-Q) that Template Studio has sent all along
+    // but this function never wrote or read back.
+    var TEMPLATE_COLUMN_COUNT = 17;
+
     // Read entire sheet once into memory -- no further reads inside the loop.
     var lastRow       = sheet.getLastRow();
-    var fullDataRange = lastRow > 0 ? sheet.getRange(1, 1, lastRow, 10).getValues() : [];
+    var fullDataRange = lastRow > 0 ? sheet.getRange(1, 1, lastRow, TEMPLATE_COLUMN_COUNT).getValues() : [];
 
     // Build a lowercase key lookup for O(1) matching.
     var existingKeys = fullDataRange.map(function(row) {
@@ -281,18 +403,31 @@ function saveSpreadsheetTemplate(payload) {
       var isDowntimeFlag = (item.templateType === "Downtime") ? "true" : "false";
       var staggeredVal   = isNaN(Number(item.staggeredWindowHours)) ? 0 : Number(item.staggeredWindowHours);
 
-      // Mapped row -- column order must match the reader index constants above.
+      var defaultDowntimeWrite = item.defaultDowntime
+        ? String(item.defaultDowntime).trim()
+        : "90 Minutes";
+
+   // Mapped row -- column order must match the reader index constants above.
       var mappedRow = [
-        itemKey,                                                // Col A: key
-        item.label    ? String(item.label).trim()    : "",     // Col B: label
-        item.subject  ? String(item.subject)         : "",     // Col C: subject
-        item.title    ? String(item.title)           : "",     // Col D: title
-        "",                                                     // Col E: unused
-        item.htmlUpper ? String(item.htmlUpper)      : "",     // Col F: htmlUpper
-        item.htmlLower ? String(item.htmlLower)      : "",     // Col G: htmlLower
-        isDowntimeFlag,                                        // Col H: requiresDowntime
-        item.notesUrl || "https://vaulthelp.veeva.com",        // Col I: notesUrl
-        staggeredVal                                           // Col J: staggeredWindowHours
+        itemKey,                                                          // Col A: key
+        item.label   ? String(item.label).trim()   : "",                 // Col B: label
+        item.subject ? String(item.subject)        : "",                 // Col C: subject
+        item.title   ? String(item.title)          : "",                 // Col D: title
+        defaultDowntimeWrite,                                             // Col E: defaultDowntime
+        item.htmlUpper ? String(item.htmlUpper)    : "",                 // Col F: htmlUpper
+        item.htmlLower ? String(item.htmlLower)    : "",                 // Col G: htmlLower
+        isDowntimeFlag,                                                   // Col H: requiresDowntime
+        item.notesUrl || "https://vaulthelp.veeva.com",                  // Col I: notesUrl
+        item.whatsNewUrl || "",                                           // Col J: whatsNewUrl
+        staggeredVal,                                                     // Col K: staggeredWindowHours
+        item.defaultVersion ? String(item.defaultVersion).trim() : "",   // Col L: defaultVersion
+        // P4-06 FIX: previously missing entirely -- these five were already
+        // arriving in item (Template Studio's payload) but were dropped here.
+        item.optionalBlock1Html  ? String(item.optionalBlock1Html)         : "",  // Col M: optionalBlock1Html
+        item.optionalBlock2Html  ? String(item.optionalBlock2Html)         : "",  // Col N: optionalBlock2Html
+        item.optionalBlock1Label ? String(item.optionalBlock1Label).trim() : "",  // Col O: optionalBlock1Label
+        item.optionalBlock2Label ? String(item.optionalBlock2Label).trim() : "",  // Col P: optionalBlock2Label
+        item.allowsRegionSegment === true ? "true" : "false"             // Col Q: allowsRegionSegment
       ];
 
       var matchIndex = existingKeys.indexOf(normalizedKey);
@@ -300,7 +435,7 @@ function saveSpreadsheetTemplate(payload) {
       if (matchIndex !== -1) {
         // Overwrite existing row in place -- one targeted write per match.
         var targetRowIndex = matchIndex + 1;  // Sheet rows are 1-based.
-        sheet.getRange(targetRowIndex, 1, 1, 10).setValues([mappedRow]);
+        sheet.getRange(targetRowIndex, 1, 1, TEMPLATE_COLUMN_COUNT).setValues([mappedRow]);
         Logger.log("[UPDATE] Overwrote template row at sheet position: " + targetRowIndex + " (key: " + itemKey + ")");
       } else {
         // Queue new row for batch append -- do NOT call appendRow() here.
@@ -312,7 +447,7 @@ function saveSpreadsheetTemplate(payload) {
     // Write all new rows in a single Sheets API call.
     if (newRowsBatch.length > 0) {
       var appendStartRow = sheet.getLastRow() + 1;
-      sheet.getRange(appendStartRow, 1, newRowsBatch.length, 10).setValues(newRowsBatch);
+      sheet.getRange(appendStartRow, 1, newRowsBatch.length, TEMPLATE_COLUMN_COUNT).setValues(newRowsBatch);
       Logger.log("[BATCH APPEND] Wrote " + newRowsBatch.length + " new template row(s) starting at row " + appendStartRow);
     }
 
