@@ -1,0 +1,351 @@
+/**
+ * FILE: TestRunner.gs
+ * LAYER: Development Utilities
+ * PURPOSE: Lightweight regression harness for GAS server-side functions.
+ *          Never called at runtime. Run manually from the GAS editor only.
+ *
+ * HOW TO RUN:
+ *   1. Select runAllTests (or any individual suite) in the function dropdown.
+ *   2. Click Run.
+ *   3. Open View > Execution Log for structured pass/fail output.
+ *
+ * SUITES:
+ *   testSuite_TimeUtil       -- calculateTimezones() pure function coverage.
+ *   testSuite_EmailRenderer  -- generateMasterHtmlLayout() token and structure coverage.
+ *   testSuite_TemplateConfig -- getSpreadsheetTemplatesConfig() live sheet contract.
+ *
+ * DEPLOYMENT NOTE:
+ *   Exclude this file from any production deployment freeze alongside DevTools.gs.
+ */
+
+
+// ===========================================================================
+// ASSERTION ENGINE
+// ===========================================================================
+
+function makeTestContext(suiteName) {
+  var passed  = 0;
+  var failed  = 0;
+  var results = [];
+
+  function record(label, ok, detail) {
+    if (ok) {
+      passed++;
+      results.push("  [PASS] " + label);
+    } else {
+      failed++;
+      results.push("  [FAIL] " + label + (detail ? " -- " + detail : ""));
+    }
+  }
+
+  return {
+    assert: function(label, condition) {
+      record(label, !!condition, condition ? "" : "expected truthy, got falsy");
+    },
+    assertEqual: function(label, actual, expected) {
+      var ok = (String(actual) === String(expected));
+      record(label, ok, ok ? "" : "expected [" + expected + "] got [" + actual + "]");
+    },
+    assertContains: function(label, haystack, needle) {
+      var ok = (String(haystack).indexOf(String(needle)) !== -1);
+      record(label, ok, ok ? "" : "expected to contain [" + needle + "]");
+    },
+    assertMatch: function(label, str, regex) {
+      var ok = regex.test(String(str));
+      record(label, ok, ok ? "" : "expected to match " + regex.toString());
+    },
+    assertNotContains: function(label, haystack, needle) {
+      var ok = (String(haystack).indexOf(String(needle)) === -1);
+      record(label, ok, ok ? "" : "expected NOT to contain [" + needle + "]");
+    },
+    summary: function() {
+      Logger.log("\n=== " + suiteName + " === " + passed + " passed, " + failed + " failed ===");
+      results.forEach(function(r) { Logger.log(r); });
+      return { passed: passed, failed: failed };
+    }
+  };
+}
+
+
+// ===========================================================================
+// MASTER RUNNER
+// ===========================================================================
+
+function runAllTests() {
+  Logger.log("========================================");
+  Logger.log("COMM GEN REGRESSION SUITE");
+  Logger.log("========================================");
+
+  var suites = [
+    testSuite_TimeUtil,
+    testSuite_EmailRenderer,
+    testSuite_TemplateConfig
+  ];
+
+  var totalPassed = 0;
+  var totalFailed = 0;
+
+  suites.forEach(function(suite) {
+    try {
+      var result = suite();
+      totalPassed += result.passed;
+      totalFailed += result.failed;
+    } catch (err) {
+      Logger.log("[SUITE CRASH] " + suite.name + ": " + err.toString());
+      totalFailed++;
+    }
+  });
+
+  Logger.log("\n========================================");
+  Logger.log("TOTAL: " + totalPassed + " passed | " + totalFailed + " failed");
+  Logger.log(totalFailed === 0 ? "ALL TESTS PASSED" : "FAILURES DETECTED -- see above");
+  Logger.log("========================================");
+}
+
+
+// ===========================================================================
+// SUITE 1: TimeUtil -- calculateTimezones()
+// ===========================================================================
+
+function testSuite_TimeUtil() {
+  var t = makeTestContext("TimeUtil :: calculateTimezones");
+
+  // -- Null / missing input guards --
+  t.assert("returns null for null input",
+    calculateTimezones(null, 0) === null);
+  t.assert("returns null for empty string",
+    calculateTimezones("", 0) === null);
+  t.assert("returns null for truncated date string",
+    calculateTimezones("2026-06", 0) === null);
+
+  // -- Valid input: January (PST, no DST) --
+  var pst = calculateTimezones("2026-01-15T10:00", 0);
+  t.assert("PST date returns non-null", pst !== null);
+  t.assertMatch("PST abbreviation present", pst.pt, /PST/);
+  t.assertMatch("PST result contains expected month", pst.pt, /January/);
+  t.assertMatch("ISO string matches expected format", pst.iso, /^\d{8}T\d{4}$/);
+  t.assertContains("ISO string value correct for PST date", pst.iso, "20260115T1000");
+
+  // -- Valid input: July (PDT, DST active) --
+  var pdt = calculateTimezones("2026-07-10T09:00", 0);
+  t.assert("PDT date returns non-null", pdt !== null);
+  t.assertMatch("PDT abbreviation present", pdt.pt, /PDT/);
+
+  // -- CEST detection (Paris summer, April-October) --
+  var cest = calculateTimezones("2026-04-29T10:00", 0);
+  t.assertMatch("CEST abbreviation present in April", cest.cest, /CEST/);
+
+  // -- CET detection (Paris winter, November-March) --
+  var cet = calculateTimezones("2026-11-15T10:00", 0);
+  t.assertMatch("CET abbreviation present in November", cet.cest, /CET/);
+
+  // -- JST is always JST --
+  t.assertMatch("JST always constant", cest.jst, /JST/);
+
+  // -- Staggered window: produces 'between' phrasing --
+  var stagger = calculateTimezones("2026-04-29T10:00", 2);
+  t.assert("staggered result non-null", stagger !== null);
+  t.assertContains("staggered PT contains 'between'",   stagger.ptStaggered,   "between");
+  t.assertContains("staggered CEST contains 'between'", stagger.cestStaggered, "between");
+  t.assertContains("staggered JST contains 'between'",  stagger.jstStaggered,  "between");
+
+  // -- Zero stagger: no 'between' phrasing --
+  t.assertNotContains("zero stagger PT has no 'between'", pst.pt, "between");
+
+  // -- Staggered window crossing midnight in JST --
+  var midnightCross = calculateTimezones("2026-04-29T07:00", 4);
+  t.assert("midnight cross stagger returns non-null", midnightCross !== null);
+  t.assertContains("midnight cross JST still contains 'between'",
+    midnightCross.jstStaggered, "between");
+
+  return t.summary();
+}
+
+
+// ===========================================================================
+// SUITE 2: EmailRenderer -- generateMasterHtmlLayout()
+// ===========================================================================
+
+function testSuite_EmailRenderer() {
+  var t = makeTestContext("EmailRenderer :: generateMasterHtmlLayout");
+
+  // -- Shared base payload (maintenance template) --
+  var base = {
+    envTheme:             "PROD",
+    version:              "26R1.0.22",
+    friendlyDate:         "Wednesday April 29 at 10:00 am PDT",
+    rawDateValue:         "2026-04-29T10:00",
+    templateKey:          "maintenance",
+    requiresDowntime:     false,
+    estimatedDowntime:    "90 Minutes",
+    staggeredWindowHours: 0,
+    emailTitle:           "Test Maintenance Notification",
+    notesUrl:             "https://vaulthelp.veeva.com",
+    whatsNewUrl:          "",
+    affectedPods:         "<u>US General Release:</u> pod01, pod02",
+    htmlUpper:            "<p>Vault maintenance scheduled.</p>",
+    htmlLower:            "Visit the Veeva Trust Site for updates."
+  };
+
+  var html = generateMasterHtmlLayout(base);
+
+  // -- Basic structure --
+  t.assert("returns a non-empty string", typeof html === "string" && html.length > 100);
+  t.assertContains("contains email title",        html, "Test Maintenance Notification");
+  t.assertContains("contains affected pod text",  html, "pod01, pod02");
+  t.assertContains("contains What row",           html, "<strong>What:</strong>");
+  t.assertContains("contains When row",           html, "<strong>When:</strong>");
+  t.assertContains("contains Affected PODs row",  html, "<strong>Affected PODs:</strong>");
+
+  // -- PROD banner --
+  t.assertContains("PROD top banner CDN path present",
+    html, "39e112bf-4c92-4bcb-9fca-cf442dfbff2d");
+
+  // -- SBX banner --
+  var sbx = generateMasterHtmlLayout(Object.assign({}, base, { envTheme: "SBX" }));
+  t.assertContains("SBX top banner CDN path present",
+    sbx, "4b9a6798-b8ad-475d-940b-67aaeb29039f");
+  t.assertNotContains("SBX does not use PROD banner",
+    sbx, "39e112bf-4c92-4bcb-9fca-cf442dfbff2d");
+
+  // -- trustMode suppresses banners --
+  var trust = generateMasterHtmlLayout(Object.assign({}, base, { trustMode: true }));
+  t.assertNotContains("trustMode suppresses top banner",    trust, "39e112bf-4c92-4bcb-9fca-cf442dfbff2d");
+  t.assertNotContains("trustMode suppresses bottom banner", trust, "66c81663-cafb-4ec2-851d-b6c10e25dfba");
+
+  // -- [[VERSION]] token in htmlUpper --
+  var vHtml = generateMasterHtmlLayout(
+    Object.assign({}, base, { htmlUpper: "Vault [[VERSION]] is upgrading." })
+  );
+  t.assertContains("[[VERSION]] in htmlUpper resolves to shortVersion", vHtml, "26R1");
+  t.assertNotContains("[[VERSION]] token fully consumed in htmlUpper",  vHtml, "[[VERSION]]");
+
+  // -- [[RELEASE_NOTES_URL]] token in htmlLower --
+  var rnHtml = generateMasterHtmlLayout(
+    Object.assign({}, base, { htmlLower: "See the [[RELEASE_NOTES_URL]] for details." })
+  );
+  t.assertContains("[[RELEASE_NOTES_URL]] expands to Release Notes anchor", rnHtml, "Release Notes");
+  t.assertContains("[[RELEASE_NOTES_URL]] anchor contains notesUrl",        rnHtml, "vaulthelp.veeva.com");
+  t.assertNotContains("[[RELEASE_NOTES_URL]] token fully consumed",          rnHtml, "[[RELEASE_NOTES_URL]]");
+
+  // -- [[WHATS_NEW_URL]] token substitution (downtime/upgrade template path) --
+  var wnHtml = generateMasterHtmlLayout(Object.assign({}, base, {
+    templateKey:       "general-release-vbv",
+    requiresDowntime:  true,
+    htmlLower:         '<a href="[[WHATS_NEW_URL]]">What\'s New</a>',
+    whatsNewUrl:       "https://vaulthelp.veeva.com/whats-new"
+  }));
+  t.assertContains("[[WHATS_NEW_URL]] replaced with configured URL",
+    wnHtml, "https://vaulthelp.veeva.com/whats-new");
+  t.assertNotContains("[[WHATS_NEW_URL]] token fully consumed", wnHtml, "[[WHATS_NEW_URL]]");
+
+  // -- [[WHATS_NEW_URL]] fallback when whatsNewUrl is empty --
+  var wnFallback = generateMasterHtmlLayout(Object.assign({}, base, {
+    htmlLower:  '<a href="[[WHATS_NEW_URL]]">What\'s New</a>',
+    whatsNewUrl: ""
+  }));
+  t.assertNotContains("[[WHATS_NEW_URL]] token consumed even with empty whatsNewUrl",
+    wnFallback, "[[WHATS_NEW_URL]]");
+
+  // -- [[DEV_LINK_TOKEN]] passes through verbatim (P3-02 retirement guard) --
+  var devHtml = generateMasterHtmlLayout(
+    Object.assign({}, base, { htmlLower: "See [[DEV_LINK_TOKEN]] for developer notes." })
+  );
+  t.assertContains("[[DEV_LINK_TOKEN]] passes through unreplaced (retired token)",
+    devHtml, "[[DEV_LINK_TOKEN]]");
+
+  // -- Anchor safety pass: target and color injected on bare anchors --
+  var anchorHtml = generateMasterHtmlLayout(
+    Object.assign({}, base, { htmlLower: '<a href="https://example.com">Example</a>' })
+  );
+  t.assertContains("anchor safety pass adds target=_blank",  anchorHtml, 'target="_blank"');
+  t.assertContains("anchor safety pass adds color style",    anchorHtml, "color: #007bff");
+  t.assertContains("anchor safety pass adds clicktracking",  anchorHtml, 'clicktracking="off"');
+
+  // -- Downtime row: renders when requiresDowntime true --
+  var dtHtml = generateMasterHtmlLayout(Object.assign({}, base, {
+    templateKey:      "general-release-classic",
+    requiresDowntime: true,
+    estimatedDowntime: "Up to 4 Hours"
+  }));
+  t.assertContains("downtime row renders configured duration", dtHtml, "Up to 4 Hours");
+  t.assertContains("downtime template uses 'Estimated Vault Downtime' label",
+    dtHtml, "Estimated Vault Downtime");
+
+  // -- Maintenance template: uses "Estimated Duration" label not "Vault Downtime" --
+  t.assertContains("maintenance template uses 'Estimated Duration' label",
+    html, "Estimated Duration");
+  t.assertNotContains("maintenance template does not use 'Vault Downtime' label",
+    html, "Estimated Vault Downtime");
+
+  // -- P1-15 regression guard: EU Prerelease colon not exclamation mark --
+  var euHtml = generateMasterHtmlLayout(
+    Object.assign({}, base, { affectedPods: "EU Prerelease: pod-eu-01" })
+  );
+  t.assertNotContains("EU Prerelease exclamation mark regression (P1-15)",
+    euHtml, "EU Prerelease!");
+
+  // -- Upgrade template: What row uses shortVersion + General Release --
+  var upgradeHtml = generateMasterHtmlLayout(Object.assign({}, base, {
+    templateKey:      "general-release-classic",
+    requiresDowntime: true,
+    emailTitle:       "Vault Classic General Release"   // must not contain 'maintenance'
+  }));
+  t.assertContains("upgrade What row contains shortVersion General Release",
+    upgradeHtml, "26R1 General Release");
+
+  // -- Maintenance template: What row uses full version --
+  t.assertContains("maintenance What row contains full version string",
+    html, "26R1.0.22");
+
+  return t.summary();
+}
+
+
+// ===========================================================================
+// SUITE 3: DataAccess -- getSpreadsheetTemplatesConfig()
+// ===========================================================================
+
+function testSuite_TemplateConfig() {
+  var t = makeTestContext("DataAccess :: getSpreadsheetTemplatesConfig");
+
+  var result = getSpreadsheetTemplatesConfig();
+
+  // -- Top-level response contract --
+  t.assertEqual("status is success",          result.status, "success");
+  t.assert("templates array present",         Array.isArray(result.templates));
+  t.assert("at least one template returned",  result.templates.length > 0);
+
+  if (!result.templates || result.templates.length === 0) return t.summary();
+
+  var first = result.templates[0];
+
+  // -- First template field contract --
+  t.assert("has non-empty key",
+    typeof first.key === "string" && first.key.length > 0);
+  t.assert("has non-empty label",
+    typeof first.label === "string" && first.label.length > 0);
+  t.assert("requiresDowntime is boolean",
+    typeof first.requiresDowntime === "boolean");
+  t.assert("staggeredWindowHours is a number",
+    typeof first.staggeredWindowHours === "number");
+  t.assertMatch("notesUrl is a valid URL", first.notesUrl, /^https?:\/\//);
+
+  // -- P2-01 regression guard: htmlUpper and htmlLower never null on any row --
+  result.templates.forEach(function(tmpl, idx) {
+    t.assert(
+      "template[" + idx + "] (" + tmpl.key + ") htmlUpper is never null/undefined",
+      tmpl.htmlUpper !== null && tmpl.htmlUpper !== undefined
+    );
+    t.assert(
+      "template[" + idx + "] (" + tmpl.key + ") htmlLower is never null/undefined",
+      tmpl.htmlLower !== null && tmpl.htmlLower !== undefined
+    );
+    t.assert(
+      "template[" + idx + "] (" + tmpl.key + ") defaultDowntime is non-empty string",
+      typeof tmpl.defaultDowntime === "string" && tmpl.defaultDowntime.length > 0
+    );
+  });
+
+  return t.summary();
+}
