@@ -11,6 +11,53 @@
  *          |   processPushRequest()
  *          | ProcessPush.gs is deleted as part of Phase 2.
  *
+ * PHASE 3 CHANGES (Region Only Segment Picker):
+ *   P3-05 | processPushRequest: added a Region Only branch. When
+ *          | formData.regionOnlyMode is true, send_to.segment_ids is built
+ *          | from TWO sources, unioned together: formData.regionalSegmentNames
+ *          | (SendGrid segment NAMES sourced from POD Profiles Column L,
+ *          | contributed only by Vault General Release / "GR" pod groups --
+ *          | the only pod groups that ever carry a Column L value, by
+ *          | business rule: the regional-segment-name path is Vault-only)
+ *          | and formData.selectedPodGroups, which in this mode is
+ *          | repurposed to carry the non-Vault-GR subset of checked PODs'
+ *          | individual Column B names (non-Vault products, and any
+ *          | Limited Release / other non-GR pod groups, never have a
+ *          | Column L value, so they fall back to their own segment instead
+ *          | of being dropped). Both resolve through the exact same
+ *          | getSegmentIdsByName() live-lookup function and
+ *          | SendGridSegmentsEnabled gate already used for the standard
+ *          | path. Column L is intentionally name-based rather than
+ *          | id-based so the sheet stays human-maintainable (segment
+ *          | names, not opaque SendGrid UUIDs), mirroring how Column B
+ *          | already works. This REPLACES send_to.segment_ids built by the
+ *          | standard path. Blank / unmatched values are filtered out,
+ *          | matching the existing silent-skip pattern used for Unmapped /
+ *          | No Match Found POD groups.
+ *          | This branch is template-type agnostic by design -- the backend
+ *          | does not check requiresDowntime or the template key. Which
+ *          | templates can ever send regionOnlyMode=true is controlled
+ *          | entirely client-side via the Email Templates Column Q flag
+ *          | (allowsRegionSegment, read in DataAccess.gs
+ *          | getSpreadsheetTemplatesConfig).
+ *
+ * PHASE 3 FIX (Vault gate + Column B fallback, client-side):
+ *   P3-06 | No change to this file's logic -- processPushRequest() already
+ *          | treats formData.regionalSegmentNames and
+ *          | formData.selectedPodGroups as opaque name lists and resolves
+ *          | both through the identical getSegmentIdsByName() lookup, so it
+ *          | needed no code change. The classification of which checked POD
+ *          | contributes to which list now happens entirely client-side in
+ *          | AppScript.html (see isVaultRegionalPod() and the submitData()
+ *          | REGION ONLY MODE block): a POD only ever contributes to
+ *          | regionalSegmentNames when its Product is Vault AND its
+ *          | pod-group name matches the General Release ("GR") pattern AND
+ *          | it has a non-blank Column L value. Any Vault GR POD that is
+ *          | missing a Column L value now falls back into
+ *          | selectedPodGroups (its own Column B name) instead of
+ *          | contributing nothing, same as every non-Vault / non-GR POD
+ *          | already did.
+ *
  * DEPENDENCIES (resolved automatically by GAS project scope):
  *   Config.gs        -> getSpreadsheetId(), CONFIG
  *   EmailRenderer.gs -> generateMasterHtmlLayout()
@@ -66,18 +113,32 @@ function getSenderIdByEmail(apiKey, senderEmail) {
 
 /**
  * Resolves SendGrid Segment IDs from a set of segment name strings.
- * Column L ("SendGrid Segment") contains human-readable segment names.
- * The Single-Send API requires segment IDs in send_to.segment_ids, not names.
- * Segments are fetched from /v3/marketing/segments and matched by name.
+ * Column B ("SendGrid Segment") on POD Profiles contains human-readable
+ * segment names. The Single-Send API requires segment IDs in
+ * send_to.segment_ids, not names. Segments are fetched from
+ * /v3/marketing/segments and matched by name.
+ *
+ * Used by both targeting paths in processPushRequest: the standard
+ * POD-group path (Column B names) and the Region Only path (Column L
+ * names, Vault General Release PODs only). Both resolve through this same
+ * live SendGrid lookup.
  *
  * @param {string}        apiKey        SendGrid API key.
- * @param {Array<string>} segmentNames  Array of segment name strings from Column L.
- * @return {Array<string>} Array of matched SendGrid segment ID strings.
- *                         Empty array if none matched or API call fails.
+ * @param {Array<string>} segmentNames  Array of segment name strings from Column B.
+ * @return {Object} { ids: Array<string>, unmatched: Array<string> }
+ *                  ids       -- matched SendGrid segment ID strings.
+ *                  unmatched -- input names that did not match any live
+ *                               SendGrid segment (typo, rename, or deletion).
+ *                               processPushRequest surfaces these to the end
+ *                               user as an informational note on success --
+ *                               not a hard failure, and never populated for
+ *                               names that were simply never submitted (a
+ *                               blank Column L value never reaches this
+ *                               function at all, so it never appears here).
  */
 function getSegmentIdsByName(apiKey, segmentNames) {
   try {
-    if (!segmentNames || segmentNames.length === 0) return [];
+    if (!segmentNames || segmentNames.length === 0) return { ids: [], unmatched: [] };
 
     var url = "https://api.sendgrid.com/v3/marketing/segments?page_size=100";
     var options = {
@@ -88,7 +149,7 @@ function getSegmentIdsByName(apiKey, segmentNames) {
     var response = UrlFetchApp.fetch(url, options);
     if (response.getResponseCode() !== 200) {
       Logger.log("[getSegmentIdsByName] SendGrid segments API returned HTTP " + response.getResponseCode());
-      return [];
+      return { ids: [], unmatched: segmentNames.slice() };
     }
 
     var responseData = JSON.parse(response.getContentText());
@@ -118,10 +179,47 @@ function getSegmentIdsByName(apiKey, segmentNames) {
       Logger.log("[getSegmentIdsByName] No segment match found for: " + JSON.stringify(unmatchedLog));
     }
     Logger.log("[getSegmentIdsByName] Resolved " + resolvedIds.length + " segment ID(s) from " + segmentNames.length + " name(s).");
-    return resolvedIds;
+    return { ids: resolvedIds, unmatched: unmatchedLog };
 
   } catch (e) {
     Logger.log("[getSegmentIdsByName] Error: " + e.toString());
+    return { ids: [], unmatched: segmentNames ? segmentNames.slice() : [] };
+  }
+}
+
+
+// ===========================================================================
+// SENDGRID HELPER: SEGMENT DIAGNOSTIC LIST
+// ===========================================================================
+
+/**
+ * Fetches the full SendGrid marketing segment list for diagnostic display.
+ * Called only on API rejection (HTTP 400+) to surface quota and naming issues.
+ * Has its own try/catch so a secondary failure cannot suppress the original error.
+ *
+ * Used for both targeting paths -- if a regional segment ID in Column L is
+ * stale (segment deleted/recreated in SendGrid since it was entered), this
+ * diagnostic list is the fastest way to spot the mismatch.
+ *
+ * @param {string} apiKey  SendGrid API key.
+ * @return {Array<Object>} Array of { id, name } objects, or empty array on failure.
+ */
+function getSegmentDiagnosticList(apiKey) {
+  try {
+    var url = "https://api.sendgrid.com/v3/marketing/segments?page_size=100";
+    var response = UrlFetchApp.fetch(url, {
+      method:             "get",
+      headers:            { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+      muteHttpExceptions: true
+    });
+    if (response.getResponseCode() !== 200) return [];
+    var data     = JSON.parse(response.getContentText());
+    var segments = data.results || data.result || [];
+    return segments.map(function(s) {
+      return { id: String(s.id), name: String(s.name || "(unnamed)") };
+    });
+  } catch (e) {
+    Logger.log("[getSegmentDiagnosticList] Error: " + e.toString());
     return [];
   }
 }
@@ -141,10 +239,36 @@ function getSegmentIdsByName(apiKey, segmentNames) {
  *   is the single owner of subject assembly including the version suffix.
  *   formData.subjectLine arrives fully assembled -- no further appending here.
  *
- * RECIPIENTS NOTE:
- *   formData.selectedPodGroups contains Column L segment name strings from
- *   checked PODs. Null / "Unmapped" PODs are excluded client-side before
- *   the payload is built. getSegmentIdsByName() resolves names to IDs.
+ * RECIPIENTS NOTE (two mutually exclusive paths, both resolved through the
+ * same getSegmentIdsByName() live SendGrid lookup):
+ *
+ *   1) STANDARD (formData.regionOnlyMode is not true):
+ *      formData.selectedPodGroups contains Column B segment name strings
+ *      from checked PODs. Null / "Unmapped" PODs are excluded client-side
+ *      before the payload is built. getSegmentIdsByName() resolves names to
+ *      IDs via a live SendGrid API lookup, gated by the SendGridSegmentsEnabled
+ *      script property.
+ *
+ *   2) REGION ONLY (formData.regionOnlyMode === true) -- hybrid, Vault-gated:
+ *      formData.regionalSegmentNames contains SendGrid segment NAME strings
+ *      sourced client-side from POD Profiles Column L (Regional SendGrid
+ *      Segment Name) for whichever Vault GENERAL RELEASE ("GR") PODs are
+ *      checked AND have a non-blank Column L value entered.
+ *      Business rule: the Column L path is Vault-only. Non-Vault products
+ *      (LIMS, RegOne, Safety) never contribute to regionalSegmentNames, even
+ *      when their pod-group name happens to match the "GR" pattern, and even
+ *      when a region is selected -- they always fall back to their own
+ *      Column B value. A Vault GR POD that is checked but has NO Column L
+ *      value also falls back to its own Column B value rather than being
+ *      dropped. All of these fallback cases arrive in
+ *      formData.selectedPodGroups -- in this mode that field carries every
+ *      checked POD EXCEPT the Vault GR PODs that resolved via Column L, not
+ *      every checked POD as it does in the standard path. Both sets resolve
+ *      through the same getSegmentIdsByName() lookup, gated by the same
+ *      SendGridSegmentsEnabled property, and are unioned/de-duplicated into
+ *      one segment_ids array. This path fully REPLACES send_to.segment_ids
+ *      built by the standard path. Blank/unmatched names are filtered out,
+ *      consistent with the existing silent-skip pattern used for Column B.
  *
  * @param {Object} formData  Full form payload from the client submitData() call.
  * @return {Object} status response object.
@@ -160,29 +284,131 @@ function processPushRequest(formData) {
 
     var rawVersion       = formData.version || "26R1.0.22";
     var cleanReleaseType = formData.releaseType || "Maintenance Only";
+
+    // PHASE 4 FIX: resolve [[PRODUCT]] the same way EmailRenderer.gs does.
+    // This is the SendGrid campaign dispatch path -- the only place that was
+    // still missing product-token resolution, since generateMasterHtmlLayout()
+    // only ever resolves the token for the returned HTML *body*, never for
+    // the title/name strings built here. Without this, a template authored
+    // with "[[PRODUCT]]" in its Default_Title would reach SendGrid with the
+    // literal, unresolved token baked into the campaign name (visible in the
+    // Single Sends list, though not shown to recipients).
+    var cleanProduct = (formData.product && String(formData.product).trim() !== "")
+      ? String(formData.product).trim()
+      : "Vault";
+
     var defaultSubject   = (cleanReleaseType === "Downtime Required")
       ? "Veeva Release Notification"
-      : "Veeva Vault Maintenance Release Notification";
+      : "Veeva " + cleanProduct + " Maintenance Release Notification";
 
-    // Client owns subject assembly -- use formData.subjectLine as-is.
-    var compiledSubjectFinal = (formData.subjectLine || defaultSubject).trim();
+    // Client owns subject assembly -- use formData.subjectLine as-is, aside
+    // from this same defensive [[PRODUCT]] resolution (the client already
+    // resolves it too, in AppScript.html's subject-building code -- this is
+    // a safety net, not the primary fix, in case subjectLine ever arrives
+    // with the token still unresolved).
+    var compiledSubjectFinal = (formData.subjectLine || defaultSubject).trim()
+      .replace(/\[\[PRODUCT\]\]/gi, cleanProduct);
 
-    var cleanEmailTitle = (formData.emailTitle || compiledSubjectFinal).trim();
+    var cleanEmailTitle = (formData.emailTitle || compiledSubjectFinal).trim()
+      .replace(/\[\[PRODUCT\]\]/gi, cleanProduct);
     var cleanFromSender = formData.fromSender  || "no-reply@vault.veeva.com";
 
     var targetSenderId = getSenderIdByEmail(SENDGRID_API_KEY, cleanFromSender);
 
-    // Resolve Column L segment names to SendGrid segment IDs.
-    // selectedPodGroups is built client-side from checked PODs whose Column L
-    // ("SendGrid Segment") value is non-null and not "Unmapped".
-    // getSegmentIdsByName fetches all SendGrid segments and matches by name.
-    var selectedSegmentNames = (formData.selectedPodGroups && formData.selectedPodGroups.length > 0)
-      ? formData.selectedPodGroups
-      : [];
-    var resolvedSegmentIds = getSegmentIdsByName(SENDGRID_API_KEY, selectedSegmentNames);
+// DIAGNOSTIC LOGGING -- remove after recipient pipeline is confirmed working.
+    Logger.log("[processPushRequest] formData.regionOnlyMode: " + formData.regionOnlyMode);
+    Logger.log("[processPushRequest] formData.selectedPodGroups raw: " + JSON.stringify(formData.selectedPodGroups));
+    Logger.log("[processPushRequest] formData.regionalSegmentNames raw: " + JSON.stringify(formData.regionalSegmentNames));
+    Logger.log("[processPushRequest] formData.releaseType: " + formData.releaseType);
+    Logger.log("[processPushRequest] formData.version: " + formData.version);
 
-    if (resolvedSegmentIds.length === 0) {
-      Logger.log("[processPushRequest] WARNING: No SendGrid segment IDs resolved. Draft will have no recipients.");
+    var resolvedSegmentIds;
+    // Accumulates any input names (Column B or Column L) that did not match
+    // a live SendGrid segment. Surfaced to the end user on success as an
+    // informational note -- never populated by blank/unsubmitted values,
+    // since both the client and the filters below drop blanks before they
+    // ever reach getSegmentIdsByName.
+    var unmatchedSegmentNames = [];
+
+    // Shared gate for BOTH targeting paths -- Column B and Column L names
+    // are both resolved through the exact same live SendGrid lookup, so
+    // they share the exact same enable/disable switch.
+    var segmentsEnabled = scriptProperties.getProperty('SendGridSegmentsEnabled');
+    Logger.log("[processPushRequest] SendGridSegmentsEnabled property value: [" + segmentsEnabled + "]");
+
+    if (formData.regionOnlyMode === true) {
+      // REGION ONLY MODE -- hybrid targeting (Vault-gated, with Column B
+      // fallback -- classification happens entirely client-side, see
+      // isVaultRegionalPod() and submitData() in AppScript.html):
+      //   Vault GR (General Release) PODs with a Column L value resolve via
+      //   formData.regionalSegmentNames (POD Profiles Column L), the
+      //   region-wide segment name.
+      //   Every other checked POD -- non-Vault products, non-GR pod groups,
+      //   and Vault GR PODs missing a Column L value -- never has a Column L
+      //   value to resolve (by design or by gap), so the client sends their
+      //   individual Column B pod-group names in formData.selectedPodGroups
+      //   instead. Both sets resolve through the identical
+      //   getSegmentIdsByName() lookup and are unioned, de-duplicated, into
+      //   one segment_ids array.
+      var regionalSegmentNames = (formData.regionalSegmentNames || [])
+        .map(function(n) { return String(n).trim(); })
+        .filter(function(n) { return n !== ""; });
+      var fallbackPodGroupNames = (formData.selectedPodGroups || [])
+        .map(function(n) { return String(n).trim(); })
+        .filter(function(n) { return n !== ""; });
+
+      Logger.log("[processPushRequest] Region Only mode active. regionalSegmentNames count: " + regionalSegmentNames.length);
+      Logger.log("[processPushRequest] Region Only mode active. regionalSegmentNames values: " + JSON.stringify(regionalSegmentNames));
+      Logger.log("[processPushRequest] Region Only mode active. fallbackPodGroupNames (non-Vault-GR) count: " + fallbackPodGroupNames.length);
+      Logger.log("[processPushRequest] Region Only mode active. fallbackPodGroupNames (non-Vault-GR) values: " + JSON.stringify(fallbackPodGroupNames));
+
+      var regionalLookup = (segmentsEnabled === 'true')
+        ? getSegmentIdsByName(SENDGRID_API_KEY, regionalSegmentNames)
+        : { ids: [], unmatched: [] };
+      var fallbackLookup = (segmentsEnabled === 'true' && fallbackPodGroupNames.length > 0)
+        ? getSegmentIdsByName(SENDGRID_API_KEY, fallbackPodGroupNames)
+        : { ids: [], unmatched: [] };
+
+      // Union, de-duplicated -- a Column B name and a Column L name could
+      // in principle resolve to the same SendGrid segment id.
+      var combinedIdsObj = {};
+      regionalLookup.ids.forEach(function(id) { combinedIdsObj[id] = true; });
+      fallbackLookup.ids.forEach(function(id) { combinedIdsObj[id] = true; });
+      resolvedSegmentIds = Object.keys(combinedIdsObj);
+
+      unmatchedSegmentNames = unmatchedSegmentNames.concat(regionalLookup.unmatched, fallbackLookup.unmatched);
+
+      Logger.log("[processPushRequest] Region Only mode active. resolvedSegmentIds count: " + resolvedSegmentIds.length);
+      Logger.log("[processPushRequest] Region Only mode active. resolvedSegmentIds values: " + JSON.stringify(resolvedSegmentIds));
+
+      if (segmentsEnabled !== 'true') {
+        Logger.log("[processPushRequest] WARNING: SendGridSegmentsEnabled is not 'true'. Current value: [" + segmentsEnabled + "]");
+      } else if (resolvedSegmentIds.length === 0) {
+        Logger.log("[processPushRequest] WARNING: Region Only mode active but no regional or fallback segment IDs resolved. Draft will have no recipients.");
+      }
+
+    } else {
+      var selectedSegmentNames = (formData.selectedPodGroups && formData.selectedPodGroups.length > 0)
+        ? formData.selectedPodGroups
+        : [];
+
+      Logger.log("[processPushRequest] selectedSegmentNames count: " + selectedSegmentNames.length);
+      Logger.log("[processPushRequest] selectedSegmentNames values: " + JSON.stringify(selectedSegmentNames));
+
+      var standardLookup = (segmentsEnabled === 'true')
+        ? getSegmentIdsByName(SENDGRID_API_KEY, selectedSegmentNames)
+        : { ids: [], unmatched: [] };
+      resolvedSegmentIds = standardLookup.ids;
+      unmatchedSegmentNames = unmatchedSegmentNames.concat(standardLookup.unmatched);
+
+      Logger.log("[processPushRequest] resolvedSegmentIds count: " + resolvedSegmentIds.length);
+      Logger.log("[processPushRequest] resolvedSegmentIds values: " + JSON.stringify(resolvedSegmentIds));
+
+      if (segmentsEnabled !== 'true') {
+        Logger.log("[processPushRequest] WARNING: SendGridSegmentsEnabled is not 'true'. Current value: [" + segmentsEnabled + "]");
+      } else if (resolvedSegmentIds.length === 0) {
+        Logger.log("[processPushRequest] WARNING: No SendGrid segment IDs resolved. Draft will have no recipients.");
+      }
     }
 
     // Campaign name (internal draft label in SendGrid UI, not shown to recipients)
@@ -196,17 +422,17 @@ function processPushRequest(formData) {
       send_to: {
         segment_ids: resolvedSegmentIds
       },
+
+      
       email_config: {
-        subject:                compiledSubjectFinal,
-        html_content:           finalHtmlBody,
-        generate_plain_content: true,
-        custom_unsubscribe_url: "https://platform.veevavault.help/en/lr/7239/#notification-email",
-        sender_id:              targetSenderId,
-        tracking_settings: {
-          open_tracking:  { enable: false },
-          click_tracking: { enable: false }
+         subject: compiledSubjectFinal,
+  html_content: finalHtmlBody,
+  generate_plain_content: true,
+  custom_unsubscribe_url:
+    "https://platform.veevavault.help/en/lr/7239/#notification-email",
+  sender_id: targetSenderId
         }
-      }
+      
     };
 
     var options = {
@@ -220,12 +446,24 @@ function processPushRequest(formData) {
     var responseCode = response.getResponseCode();
 
     if (responseCode >= 400) {
+      var segmentDiagnostic = getSegmentDiagnosticList(SENDGRID_API_KEY);
+      Logger.log("[processPushRequest] Segment diagnostic on " + responseCode + ": " + JSON.stringify(segmentDiagnostic));
       return {
-        status:  'error',
-        message: "SendGrid Refused Payload (HTTP " + responseCode + "): " + response.getContentText()
+        status:            'error',
+        message:           "SendGrid Refused Payload (HTTP " + responseCode + "): " + response.getContentText(),
+        segmentDiagnostic: segmentDiagnostic
       };
     }
-    return { status: 'success' };
+
+    var successResponse = { status: 'success' };
+    // Only attached when something was genuinely entered but didn't match a
+    // live SendGrid segment -- never fires for blank/unsubmitted values, so
+    // this does not add noise to the normal case of partially-populated
+    // Column L during rollout.
+    if (unmatchedSegmentNames.length > 0) {
+      successResponse.unmatchedSegmentNames = unmatchedSegmentNames;
+    }
+    return successResponse;
 
   } catch (err) {
     Logger.log(err.stack);
