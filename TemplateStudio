@@ -1,0 +1,560 @@
+<!-- ================================================================
+     FILE: TemplateStudio.html
+     LAYER: UI — Template Studio Tab
+     PURPOSE: Self-contained Tab 2 content for the GAS web app.
+     Included into Index.html via <?!= include('TemplateStudio'); ?>
+     All TS layout CSS lives here; AppScript.html drives all JS.
+     DOM IDs are unchanged — AppScript references work as before.
+     v4.3.0 — Default Release Version field added to col-1
+================================================================= -->
+<style>
+  /* ==============================================================
+     FILE: TemplateStudio.html
+     PURPOSE: Template Studio tab CSS — 3-column layout (v4.3.0)
+     These rules are scoped to Template Studio only.
+     Included into Index.html via include('TemplateStudio').
+  =============================================================== */
+  .ts-outer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    overflow: hidden;
+  }
+  .ts-action-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+    flex-shrink: 0;
+    gap: 10px;
+  }
+  .ts-action-bar .ts-template-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+  }
+  .ts-action-bar .ts-template-selector label {
+    font-size: 0.7em;
+    font-weight: 700;
+    color: #4a5568;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0;
+  }
+  .ts-action-bar .ts-template-selector select {
+    font-size: 0.82em;
+    padding: 5px 8px;
+    border: 1px solid #b8c9df;
+    border-radius: 4px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .ts-save-btn {
+    background-color: #1a73e8;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 9px 18px;
+    font-size: 0.85em;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.2s;
+  }
+  .ts-save-btn:hover         { background-color: #155cb8; }
+  .ts-save-btn.success-state { background-color: #28a745 !important; box-shadow: 0 0 10px rgba(40,167,69,0.35); }
+  .ts-workspace {
+    display: flex;
+    flex-direction: row;
+    gap: 0;
+    width: 100%;
+    min-height: calc(100vh - 120px);
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+  .ts-col-meta {
+    flex: 0 0 23%;
+    min-width: 210px;
+    max-width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px 14px;
+    background: #ffffff;
+    border-right: 1px solid #e2e8f0;
+    overflow-y: auto;
+    max-height: calc(100vh - 120px);
+    box-sizing: border-box;
+  }
+  .ts-col-meta .col-heading {
+    font-size: 0.68em;
+    font-weight: 700;
+    color: #4a5568;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 4px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #1a73e8;
+  }
+  .ts-col-meta label {
+    font-size: 0.78em;
+    font-weight: 600;
+    color: #4a5568;
+    margin-top: 4px;
+  }
+  .ts-col-meta input,
+  .ts-col-meta select { font-size: 0.82em; padding: 6px 8px; }
+  .ts-col-meta .field-tooltip { font-size: 0.7em; }
+  .ts-col-content {
+    flex: 1 1 45%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px 16px;
+    background: #f8fafc;
+    overflow-y: auto;
+    max-height: calc(100vh - 120px);
+    box-sizing: border-box;
+  }
+  .ts-col-content .col-heading {
+    font-size: 0.68em;
+    font-weight: 700;
+    color: #4a5568;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 2px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #1a73e8;
+  }
+
+  /* =====================================================================
+     WYSIWYG EDITOR — Document-style toolbar
+  ===================================================================== */
+  .wysiwyg-block {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .wysiwyg-label {
+    font-size: 0.82em;
+    font-weight: bold;
+    color: #444;
+    margin-bottom: 5px;
+    display: block;
+  }
+  .wysiwyg-wrapper {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    border: 1px solid #c8d0da;
+    border-radius: 6px;
+    overflow: hidden;
+    box-sizing: border-box;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  .wysiwyg-toolbar {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 5px 8px;
+    background: linear-gradient(to bottom, #f7f9fc, #eef1f6);
+    border-bottom: 1px solid #c8d0da;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .wysiwyg-toolbar button {
+    background: transparent;
+    border: 1px solid transparent;
+    padding: 3px 7px;
+    font-size: 0.78em;
+    font-weight: 600;
+    color: #2d3748;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1.7;
+    transition: all 0.12s;
+    flex-shrink: 0;
+    min-width: 24px;
+    text-align: center;
+  }
+  .wysiwyg-toolbar button:hover {
+    background: #ffffff;
+    border-color: #b8c9df;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    color: #1a73e8;
+  }
+  .wysiwyg-toolbar button:active {
+    background: #e8f0fe;
+    border-color: #1a73e8;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);
+  }
+  .wysiwyg-toolbar select {
+    font-size: 0.76em;
+    padding: 3px 4px;
+    border: 1px solid #c8d0da;
+    border-radius: 3px;
+    color: #2d3748;
+    background: #ffffff;
+    cursor: pointer;
+    height: 26px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+  .wysiwyg-toolbar select:hover {
+    border-color: #1a73e8;
+  }
+  .toolbar-sep {
+    width: 1px;
+    height: 20px;
+    background: #c8d0da;
+    margin: 0 3px;
+    flex-shrink: 0;
+  }
+  .toolbar-row-break {
+    width: 100%;
+    height: 0;
+    border-top: 1px solid #e2e8f0;
+    margin: 2px 0;
+    flex-basis: 100%;
+  }
+  .toolbar-group-label {
+    font-size: 0.62em;
+    font-weight: 700;
+    color: #a0aec0;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    padding: 0 4px;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .color-btn-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    cursor: pointer;
+    padding: 2px 4px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    transition: all 0.12s;
+  }
+  .color-btn-wrapper:hover {
+    background: #ffffff;
+    border-color: #b8c9df;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  }
+  .color-btn-wrapper span.color-icon {
+    font-size: 0.8em;
+    font-weight: 700;
+    color: #2d3748;
+    line-height: 1;
+  }
+  .color-btn-wrapper input[type="color"] {
+    width: 22px;
+    height: 5px;
+    padding: 0;
+    border: none;
+    border-radius: 1px;
+    cursor: pointer;
+    background: none;
+  }
+  .wysiwyg-editor {
+    width: 100%;
+    min-height: 220px;
+    padding: 14px 16px;
+    font-family: Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #333;
+    background: #ffffff;
+    outline: none;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+  .wysiwyg-editor:focus {
+    box-shadow: inset 0 0 0 2px #1a73e8;
+  }
+  .wysiwyg-editor table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0;
+  }
+  .wysiwyg-editor td, .wysiwyg-editor th {
+    border: 1px solid #cbd5e1;
+    padding: 6px 10px;
+    min-width: 60px;
+  }
+</style>
+
+      <!-- ================================================================
+           TAB 2: TEMPLATE STUDIO  (v4.3.0 — 3-column layout)
+      ================================================================= -->
+      <div id="view-template-ed" class="app-view-container ts-outer" style="display:none;">
+
+        <!-- PERSISTENT ACTION BAR -->
+        <div class="ts-action-bar">
+          <div class="ts-template-selector">
+            <label for="editorTemplateSelect">Target Workspace Record</label>
+            <select id="editorTemplateSelect" onchange="loadTemplateToEditorForm()">
+              <option value="">Parsing internal configuration keys...</option>
+            </select>
+          </div>
+          <input type="hidden" id="ed_key" value="">
+          <button id="saveTemplateBtn" class="ts-save-btn success-state"
+                  type="button" onclick="submitTemplateConfigToServer()">
+            &#128190; Save &amp; Apply
+          </button>
+        </div>
+
+        <!-- 3-COLUMN WORKSPACE -->
+        <div class="ts-workspace">
+
+          <!-- COL 1: TEMPLATE SCOPE -->
+          <aside class="ts-col-meta" autocomplete="off">
+            <div class="col-heading">1. Template Scope</div>
+
+            <label>Template Type</label>
+            <select id="ed_templateType" onchange="toggleEditorTypeFields(this.value)">
+              <option value="Maintenance">Maintenance (No Downtime)</option>
+              <option value="Downtime">Downtime (GR)</option>
+            </select>
+
+            <label>Template Name</label>
+            <input type="text" id="ed_label" autocomplete="off"
+                   placeholder="e.g., Vault General Release - VBV">
+
+            <label>Default Subject</label>
+            <input type="text" id="ed_subject" autocomplete="off">
+
+            <label>Default Title</label>
+            <input type="text" id="ed_title" autocomplete="off">
+
+            <!-- DEFAULT RELEASE VERSION — v4.3.0
+                 Stored in Column L of the Email Templates sheet.
+                 When a template is selected in the Comm Generator,
+                 evaluateReleaseTypeContext() reads activeMatch.defaultVersion
+                 and pre-fills the Release Version input field, triggering
+                 the full propagation chain (subject suffix, world clock ISO,
+                 Early pod R-cycle detection, preview render, API dispatch).
+                 Leave blank to preserve whatever version the user last typed. -->
+            <label>Default Release Version</label>
+            <span class="field-tooltip">Auto-fills the Release Version field in the Comm Generator when this template is selected. Leave blank to preserve the user's current value.</span>
+            <input type="text" id="ed_defaultVersion" autocomplete="off"
+                   placeholder="e.g. 26R1.0.22">
+
+            <div id="ed_downtime_fields" style="display:none; flex-direction:column; gap:6px;
+                 padding-left:10px; border-left:3px solid #cbd5e1; margin-top:4px;">
+              <label>Default Downtime Duration</label>
+              <span class="field-tooltip">Pre-fills the downtime field in the Comm Generator.</span>
+              <input type="text" id="ed_defaultDowntime" value="90 Minutes" autocomplete="off"
+                     placeholder="e.g. 90 Minutes, Up to 4 Hours">
+              <label>Staggered Window (Hours)</label>
+              <input type="number" id="ed_staggeredHours" value="0" min="0" max="12" autocomplete="off">
+            </div>
+
+            <label>Relase Notes URL</label>
+            <input type="text" id="ed_notesUrl" value="https://vaulthelp.veeva.com" autocomplete="off">
+
+            <div id="ed_whatsNewUrlWrapper" style="display:none; flex-direction:column; gap:4px;">
+              <label>What's New URL</label>
+              <span class="field-tooltip">Injected via [[WHATS_NEW_URL]] in the Footer block.</span>
+              <input type="text" id="ed_whatsNewUrl" value="" autocomplete="off"
+                     placeholder="https://vaulthelp.veeva.com/whats-new">
+            </div>
+
+            <!-- Optional block label inputs — Maintenance only -->
+            <div id="ed_optionalBlockSection" style="display:none; flex-direction:column; gap:6px;
+                 padding-top:10px; border-top:1px solid #cbd5e1; margin-top:4px;">
+              <span style="font-size:0.7em; font-weight:700; color:#2c5282;
+                    text-transform:uppercase; letter-spacing:0.5px;">Optional Block Labels</span>
+              <span class="field-tooltip">
+                These labels appear as radio button text in the Comm Generator.
+                Block HTML content is authored in the editors in Column 2.
+              </span>
+              <label>Block 1 Label</label>
+              <input type="text" id="ed_optBlock1Label" autocomplete="off"
+                     placeholder="e.g. Include advisory notice">
+              <label>Block 2 Label</label>
+              <input type="text" id="ed_optBlock2Label" autocomplete="off"
+                     placeholder="e.g. Include regulatory footnote">
+            </div>
+          </aside>
+
+          <!-- COL 2: CONTENT & DYNAMIC BLOCKS -->
+          <section class="ts-col-content">
+            <div class="col-heading">2. Content &amp; Dynamic Blocks</div>
+
+            <!-- UPPER EDITOR -->
+            <div class="wysiwyg-block">
+              <span class="wysiwyg-label">Header HTML Block (htmlUpper &mdash; Above Pod Grid Layout)</span>
+              <div class="wysiwyg-wrapper">
+                <div class="wysiwyg-toolbar">
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_upper_editor','bold')"><b>B</b></button>
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_upper_editor','italic')"><i>I</i></button>
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_upper_editor','underline')"><u>U</u></button>
+                  <div class="toolbar-sep"></div>
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_upper_editor','insertUnorderedList')">&#8226; List</button>
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_upper_editor','insertOrderedList')">1. List</button>
+                  <div class="toolbar-sep"></div>
+                  <button type="button" onmousedown="event.preventDefault(); insertEditorBreak('ed_upper_editor','br')">BR</button>
+                  <button type="button" onmousedown="event.preventDefault(); insertEditorBreak('ed_upper_editor','hr')">HR</button>
+                  <div class="toolbar-sep"></div>
+                  <button type="button" onmousedown="event.preventDefault(); alignEditor('ed_upper_editor','Left')">&#8676; L</button>
+                  <button type="button" onmousedown="event.preventDefault(); alignEditor('ed_upper_editor','Center')">&#8741; C</button>
+                  <button type="button" onmousedown="event.preventDefault(); alignEditor('ed_upper_editor','Right')">&#8677; R</button>
+                  <div class="toolbar-sep"></div>
+                  <button type="button" onmousedown="event.preventDefault(); openLinkModal('ed_upper_editor')">+ Link</button>
+                  <div class="toolbar-sep"></div>
+                  <select onchange="applyFontSize('ed_upper_editor', this.value); this.value='';">
+                    <option value="">px</option>
+                    <option value="11px">11px</option>
+                    <option value="12px">12px</option>
+                    <option value="13px">13px</option>
+                    <option value="14px">14px</option>
+                    <option value="16px">16px</option>
+                    <option value="18px">18px</option>
+                    <option value="20px">20px</option>
+                    <option value="24px">24px</option>
+                  </select>
+                  <button type="button" onmousedown="event.preventDefault(); clearEditorFormatting('ed_upper_editor')">&#10006; Clear</button>
+                  <div class="toolbar-sep"></div>
+                  <select onchange="insertEditorToken('ed_upper_editor', this.value); this.value='';">
+                    <option value="">+ Token</option>
+                    <option value="[[VERSION]]">[[VERSION]]</option>
+                    <option value="[[PRODUCT]]">[[PRODUCT]]</option>
+                    <option value="[[LOCATION_TAG]]">[[LOCATION_TAG]]</option>
+                  </select>
+                </div>
+                <div id="ed_upper_editor" class="wysiwyg-editor" contenteditable="true"></div>
+              </div>
+            </div>
+
+            <!-- LOWER EDITOR -->
+            <div class="wysiwyg-block">
+              <span class="wysiwyg-label">Footer HTML Block (htmlLower &mdash; Below Pod Grid Layout)</span>
+              <div class="wysiwyg-wrapper">
+                <div class="wysiwyg-toolbar">
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_lower_editor','bold')"><b>B</b></button>
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_lower_editor','italic')"><i>I</i></button>
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_lower_editor','underline')"><u>U</u></button>
+                  <div class="toolbar-sep"></div>
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_lower_editor','insertUnorderedList')">&#8226; List</button>
+                  <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_lower_editor','insertOrderedList')">1. List</button>
+                  <div class="toolbar-sep"></div>
+                  <button type="button" onmousedown="event.preventDefault(); insertEditorBreak('ed_lower_editor','br')">BR</button>
+                  <button type="button" onmousedown="event.preventDefault(); insertEditorBreak('ed_lower_editor','hr')">HR</button>
+                  <div class="toolbar-sep"></div>
+                  <button type="button" onmousedown="event.preventDefault(); alignEditor('ed_lower_editor','Left')">&#8676; L</button>
+                  <button type="button" onmousedown="event.preventDefault(); alignEditor('ed_lower_editor','Center')">&#8741; C</button>
+                  <button type="button" onmousedown="event.preventDefault(); alignEditor('ed_lower_editor','Right')">&#8677; R</button>
+                  <div class="toolbar-sep"></div>
+                  <button type="button" onmousedown="event.preventDefault(); openLinkModal('ed_lower_editor')">+ Link</button>
+                  <div class="toolbar-sep"></div>
+                  <select onchange="applyFontSize('ed_lower_editor', this.value); this.value='';">
+                    <option value="">px</option>
+                    <option value="11px">11px</option>
+                    <option value="12px">12px</option>
+                    <option value="13px">13px</option>
+                    <option value="14px">14px</option>
+                    <option value="16px">16px</option>
+                    <option value="18px">18px</option>
+                    <option value="20px">20px</option>
+                    <option value="24px">24px</option>
+                  </select>
+                  <button type="button" onmousedown="event.preventDefault(); clearEditorFormatting('ed_lower_editor')">&#10006; Clear</button>
+                  <div class="toolbar-sep"></div>
+                  <select onchange="insertEditorToken('ed_lower_editor', this.value); this.value='';">
+                    <option value="">+ Token</option>
+                    <option value="[[VERSION]]">[[VERSION]]</option>
+                    <option value="[[PRODUCT]]">[[PRODUCT]]</option>
+                    <option value="[[LOCATION_TAG]]">[[LOCATION_TAG]]</option>
+                    <option value="[[RELEASE_NOTES_URL]]">[[RELEASE_NOTES_URL]]</option>
+                    <option value="[[WHATS_NEW_URL]]">[[WHATS_NEW_URL]]</option>
+                    <option value="[[OPTIONAL_BLOCK]]">[[OPTIONAL_BLOCK]]</option>
+                  </select>
+                </div>
+                <div id="ed_lower_editor" class="wysiwyg-editor" contenteditable="true"></div>
+              </div>
+            </div>
+
+            <!-- OPTIONAL BLOCK EDITORS — Maintenance templates only -->
+            <div id="ed_optionalBlockSection_editors" style="display:none; flex-direction:column; gap:14px;">
+
+              <div class="wysiwyg-block">
+                <div class="wysiwyg-label">
+                  <span class="wysiwyg-label-text" style="color:#1a73e8;">Optional Block 1 Content</span>
+                </div>
+                <div class="wysiwyg-wrapper" style="border-color:#b8d4f8;">
+                  <div class="wysiwyg-toolbar" style="background:#f0f6ff;">
+                    <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_optBlock1_editor','bold')"><b>B</b></button>
+                    <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_optBlock1_editor','italic')"><i>I</i></button>
+                    <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_optBlock1_editor','underline')"><u>U</u></button>
+                    <div class="toolbar-sep"></div>
+                    <button type="button" onmousedown="event.preventDefault(); insertEditorBreak('ed_optBlock1_editor','br')">BR</button>
+                    <button type="button" onmousedown="event.preventDefault(); insertEditorBreak('ed_optBlock1_editor','hr')">HR</button>
+                    <div class="toolbar-sep"></div>
+                    <button type="button" onmousedown="event.preventDefault(); openLinkModal('ed_optBlock1_editor')">+ Link</button>
+                    <div class="toolbar-sep"></div>
+                    <button type="button" onmousedown="event.preventDefault(); clearEditorFormatting('ed_optBlock1_editor')">&#10006; Clear</button>
+                    <div class="toolbar-sep"></div>
+                    <select onchange="insertEditorToken('ed_optBlock1_editor', this.value); this.value='';">
+                      <option value="">+ Token</option>
+                      <option value="[[VERSION]]">[[VERSION]]</option>
+                      <option value="[[PRODUCT]]">[[PRODUCT]]</option>
+                      <option value="[[LOCATION_TAG]]">[[LOCATION_TAG]]</option>
+                      <option value="[[RELEASE_NOTES_URL]]">[[RELEASE_NOTES_URL]]</option>
+                      <option value="[[WHATS_NEW_URL]]">[[WHATS_NEW_URL]]</option>
+                    </select>
+                  </div>
+                  <div id="ed_optBlock1_editor" class="wysiwyg-editor"
+                       style="min-height:90px;" contenteditable="true"></div>
+                </div>
+              </div>
+
+              <div class="wysiwyg-block">
+                <div class="wysiwyg-label">
+                  <span class="wysiwyg-label-text" style="color:#1a73e8;">Optional Block 2 Content</span>
+                </div>
+                <div class="wysiwyg-wrapper" style="border-color:#b8d4f8;">
+                  <div class="wysiwyg-toolbar" style="background:#f0f6ff;">
+                    <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_optBlock2_editor','bold')"><b>B</b></button>
+                    <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_optBlock2_editor','italic')"><i>I</i></button>
+                    <button type="button" onmousedown="event.preventDefault(); editorCommand('ed_optBlock2_editor','underline')"><u>U</u></button>
+                    <div class="toolbar-sep"></div>
+                    <button type="button" onmousedown="event.preventDefault(); insertEditorBreak('ed_optBlock2_editor','br')">BR</button>
+                    <button type="button" onmousedown="event.preventDefault(); insertEditorBreak('ed_optBlock2_editor','hr')">HR</button>
+                    <div class="toolbar-sep"></div>
+                    <button type="button" onmousedown="event.preventDefault(); openLinkModal('ed_optBlock2_editor')">+ Link</button>
+                    <div class="toolbar-sep"></div>
+                    <button type="button" onmousedown="event.preventDefault(); clearEditorFormatting('ed_optBlock2_editor')">&#10006; Clear</button>
+                    <div class="toolbar-sep"></div>
+                    <select onchange="insertEditorToken('ed_optBlock2_editor', this.value); this.value='';">
+                      <option value="">+ Token</option>
+                      <option value="[[VERSION]]">[[VERSION]]</option>
+                      <option value="[[PRODUCT]]">[[PRODUCT]]</option>
+                      <option value="[[LOCATION_TAG]]">[[LOCATION_TAG]]</option>
+                      <option value="[[RELEASE_NOTES_URL]]">[[RELEASE_NOTES_URL]]</option>
+                      <option value="[[WHATS_NEW_URL]]">[[WHATS_NEW_URL]]</option>
+                    </select>
+                  </div>
+                  <div id="ed_optBlock2_editor" class="wysiwyg-editor"
+                       style="min-height:90px;" contenteditable="true"></div>
+                </div>
+              </div>
+
+            </div><!-- /#ed_optionalBlockSection_editors -->
+
+            <!-- Ghost textareas: hidden, kept for pipeline compatibility -->
+            <textarea id="ed_htmlUpper" style="display:none;"></textarea>
+            <textarea id="ed_htmlLower" style="display:none;"></textarea>
+          </section>
+
+        </div><!-- /.ts-workspace -->
+      </div>
